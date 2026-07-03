@@ -77,12 +77,25 @@ def run(report_date: dt.date, send=True):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--no-email"]
-    send = "--no-email" not in sys.argv[1:]
-    if args:
-        report_date = dt.date.fromisoformat(args[0])
+    argv = sys.argv[1:]
+    scheduled = "--scheduled" in argv          # used by the Coolify cron
+    send = "--no-email" not in argv
+    dates = [a for a in argv if not a.startswith("--")]
+
+    if scheduled:
+        # The cron fires at both 17:00 and 18:00 UTC to cover BST and GMT;
+        # only actually run at exactly 18:00 London (DST-proof).
+        from zoneinfo import ZoneInfo
+        now = dt.datetime.now(ZoneInfo("Europe/London"))
+        if now.hour != 18:
+            print(f"[guard] London time {now:%Y-%m-%d %H:%M} is not 18:00 — skipping this fire.")
+            sys.exit(0)
+        report_date = now.date()
+    elif dates:
+        report_date = dt.date.fromisoformat(dates[0])
     else:
         report_date = pick_report_date(dt.date.today())
+
     sys.exit(run(report_date, send=send))
 
 
