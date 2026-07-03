@@ -9,6 +9,7 @@ Reads from .env:
 Usage:
     python send_email.py <pdf> <xlsx> <report_date_long> ["Today's total"]
 """
+import os
 import sys
 import json
 import base64
@@ -20,12 +21,15 @@ HERE = Path(__file__).parent
 
 
 def load_env():
-    env = {}
-    for line in (HERE / ".env").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip()
+    """OS env vars (prod) win; local .env fills gaps for development."""
+    env = dict(os.environ)
+    p = HERE / ".env"
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
     return env
 
 

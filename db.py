@@ -9,6 +9,7 @@ Tables:
 The daily automation calls ingest() after building the report; the web
 dashboard and the hub's AI read these tables.
 """
+import os
 import sys
 import datetime as dt
 from pathlib import Path
@@ -21,12 +22,16 @@ HERE = Path(__file__).parent
 
 
 def _load_env():
-    env = {}
-    for line in (HERE / ".env").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip()
+    """Real environment variables (production/Coolify) win; a local .env file
+    fills in the gaps for development."""
+    env = dict(os.environ)
+    p = HERE / ".env"
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
     return env
 
 

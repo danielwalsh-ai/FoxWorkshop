@@ -10,6 +10,7 @@ Usage:
 The report name + URL pattern were discovered from the Autovolt Reports page:
     /reports/tzp/run?report=supplierTransactionReport&start=YYYY-MM-DD&end=YYYY-MM-DD
 """
+import os
 import sys
 import datetime as dt
 from pathlib import Path
@@ -20,12 +21,15 @@ OUT_CSV = HERE / "SupplierTransaction.csv"
 
 
 def load_env():
-    env = {}
-    for line in (HERE / ".env").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip()
+    """OS env vars (prod) win; local .env fills gaps for development."""
+    env = dict(os.environ)
+    p = HERE / ".env"
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
     return env
 
 
