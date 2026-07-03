@@ -24,14 +24,12 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Table, TableStyle
 
-import classify as C
 from classify import (
     COVER_TOP_ROW, COVER_BOTTOM_ROW, INFO_ROWS, SCANIA_ROW, VOLVO_ROW, CAPITAL_ROW,
     PRE24_ROW, R24_ROW, R25_ROW, BOT_TOTAL_ROW, TOP_SHEETS, sheet_to_row, PLATE_ROWS,
-    process_csv,
 )
-from date_args import compute as compute_dates
-from vrm_lookup import load_lookup
+from date_args import compute as compute_dates, working_day_index, last_working_day
+import queries
 
 HERE = Path(__file__).parent
 FIXED_WD = 22  # working days per month (Daniel's convention)
@@ -68,47 +66,81 @@ def make_blank_template(base_path: Path, out_path: Path):
     return out_path
 
 
-def build(csv_path, report_date: dt.date, base_path: Path, fixed_wd=FIXED_WD):
+def build(report_date: dt.date, fixed_wd=FIXED_WD):
+    """Build the workbook + PDF for report_date, sourcing every figure for the
+    whole month from the database — so month-to-date is always correct and no
+    fragile rolling 'state' file is needed."""
     info = compute_dates(report_date, fixed_wd=fixed_wd)
     today_col = info['today_col']
     days_elapsed = info['days_elapsed']
     days_remaining = info['days_remaining']
     wd = info['working_days_in_month']
-    is_new_month = info['is_new_month']
+    y, m = report_date.year, report_date.month
 
     out_xlsx = HERE / f"fox_transaction_report_{report_date:%d-%m-%Y}.xlsx"
     out_pdf = HERE / f"daily_kpi_report_{report_date:%d-%m-%Y}.pdf"
     report_date_long = fmt_date_long(report_date)
-
     print(f"Building {report_date_long}  col={today_col} elapsed={days_elapsed} "
-          f"remaining={days_remaining} wd={wd} new_month={is_new_month}")
+          f"remaining={days_remaining} wd={wd}  (from database)")
 
-    # ── load data ──
-    reg_to_area, reg_make, reg_plate = load_lookup()
-    df = process_csv(csv_path, report_date, reg_to_area, reg_plate)
-    print(f"CSV rows for {report_date}: {len(df)}  £{df['Cost'].sum():,.2f}")
-
-    # ── choose starting workbook ──
-    if is_new_month:
-        blank = HERE / "blank_template.xlsx"
-        if not blank.exists():
-            print("Generating blank template from base...")
-            make_blank_template(base_path, blank)
-        shutil.copy(blank, out_xlsx)
-    else:
-        shutil.copy(base_path, out_xlsx)
-
+    # structural template only (labels, formulas, budgets in col 35 — no figures)
+    shutil.copy(HERE / "blank_template.xlsx", out_xlsx)
     wb = load_workbook(out_xlsx)
     cover = wb['Cover']
 
-    # mid-month: clear tabs back to header (today's rows get written fresh)
-    if not is_new_month:
-        for tab in wb.sheetnames:
-            if tab == 'Cover':
-                continue
-            ws = wb[tab]
-            if ws.max_row > 1:
-                ws.delete_rows(2, ws.max_row)
+    for tab in wb.sheetnames:                       # clear all division tabs
+        if tab == 'Cover':
+            continue
+        ws = wb[tab]
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row)
+
+    data_rows = list(range(3, 36, 2)) + INFO_ROWS + list(COVER_BOTTOM_ROW.values())
+    for r in data_rows:
+        for c in range(2, today_col + 1):
+            cover.cell(r, c, 0)
+
+    def col_for(d):
+        # weekend/holiday-dated lines fold into the prior working-day column
+        return working_day_index(last_working_day(d)) + 1
+
+    # whitespace-tolerant lookups (DB strips names; some labels e.g.
+    # 'Asphalt Plant ' carry a trailing space in the workbook)
+    ROW_BY_DIV = {k.strip(): v for k, v in sheet_to_row.items()}
+    BOTTOM_BY_AREA = {k.strip(): v for k, v in COVER_BOTTOM_ROW.items()}
+    TOP_STRIPPED = {s.strip() for s in TOP_SHEETS}
+
+    # accumulate every transaction of the month into (row, column) cells
+    acc = {}
+
+    def add(row, col, cost):
+        acc[(row, col)] = acc.get((row, col), 0.0) + cost
+
+    for rdate, division, area, plate, supplier, cost in queries.month_rows(y, m):
+        col = col_for(rdate)
+        if col < 2 or col > today_col:
+            continue
+        cost = float(cost or 0)
+        division = (division or '').strip()
+        area = (area or '').strip()
+        drow = ROW_BY_DIV.get(division)
+        if drow:
+            add(drow, col, cost)
+        if division in TOP_STRIPPED:
+            arow = BOTTOM_BY_AREA.get(area)
+            if arow:
+                add(arow, col, cost)
+            prow = PLATE_ROWS.get(plate)
+            if prow:
+                add(prow, col, cost)
+        sup = (supplier or '').upper()
+        if 'SCANIA' in sup:
+            add(SCANIA_ROW, col, cost)
+        elif 'VOLVO' in sup or 'THOMAS HARDIE' in sup:
+            add(VOLVO_ROW, col, cost)
+
+    for (r, c), v in acc.items():
+        cover.cell(r, c, round(v, 2))
 
     def gcv(r, c):
         v = cover.cell(r, c).value
@@ -119,41 +151,6 @@ def build(csv_path, report_date: dt.date, base_path: Path, fixed_wd=FIXED_WD):
         except (TypeError, ValueError):
             return 0.0
 
-    # ── write cover (today's column) ──
-    # reset today's column first so a re-run can never double-count
-    reset_rows = list(range(3, 36, 2)) + INFO_ROWS + list(COVER_BOTTOM_ROW.values())
-    for r in reset_rows:
-        cover.cell(r, today_col, 0)
-
-    for _, row in df.iterrows():
-        cost = float(row['Cost'])
-        sheet = row['Sheet']
-        crow = sheet_to_row.get(sheet)
-        if crow:
-            cover.cell(crow, today_col, round(gcv(crow, today_col) + cost, 2))
-        if sheet in TOP_SHEETS:
-            at = row['Area']
-            if at in COVER_BOTTOM_ROW:
-                brow = COVER_BOTTOM_ROW[at]
-                cover.cell(brow, today_col, round(gcv(brow, today_col) + cost, 2))
-        sup = str(row.get('Supplier', '')).upper()
-        if 'SCANIA' in sup:
-            cover.cell(SCANIA_ROW, today_col, round(gcv(SCANIA_ROW, today_col) + cost, 2))
-        elif 'VOLVO' in sup or 'THOMAS HARDIE' in sup:
-            cover.cell(VOLVO_ROW, today_col, round(gcv(VOLVO_ROW, today_col) + cost, 2))
-        if sheet in TOP_SHEETS:
-            pc = row['Plate']
-            if pc and pc in PLATE_ROWS:
-                pr = PLATE_ROWS[pc]
-                cover.cell(pr, today_col, round(gcv(pr, today_col) + cost, 2))
-
-    # zero-fill today's column
-    all_data_rows = list(range(3, 36, 2)) + INFO_ROWS + list(COVER_BOTTOM_ROW.values())
-    for r in all_data_rows:
-        if cover.cell(r, today_col).value is None:
-            cover.cell(r, today_col, 0)
-
-    # ── MTD (col 33) + Remaining (col 37), budgets read from col 35 ──
     def get_mtd(rn):
         return round(sum(gcv(rn, c) for c in range(2, today_col + 1)), 2)
 
@@ -164,39 +161,39 @@ def build(csv_path, report_date: dt.date, base_path: Path, fixed_wd=FIXED_WD):
         if budget:
             cover.cell(rn, REMAIN_COL, round(budget - get_mtd(rn), 2))
 
-    # ── write tabs (today's rows only) ──
-    for sheet_name in df['Sheet'].unique():
-        if sheet_name not in wb.sheetnames:
+    # write the day's transactions into the division tabs
+    tabmap = {s.strip(): s for s in wb.sheetnames}
+    nextrow = {}
+    for row in queries.day_tab_rows(report_date):
+        sn = tabmap.get((row['division'] or '').strip())
+        if not sn:
             continue
-        ws = wb[sheet_name]
-        nr = 2
-        for _, row in df[df['Sheet'] == sheet_name].iterrows():
-            def s(v):
-                import pandas as pd
-                return None if pd.isna(v) else v
-            ws.cell(nr, 1, str(row.get('Supplier', '')) or '')
-            ws.cell(nr, 2, str(row.get('Supplier Source Depot', '')) or '')
-            ws.cell(nr, 3, str(row.get('365 No', '')) or '')
-            ws.cell(nr, 4, str(row.get('Supplier PN', '')) or '')
-            ws.cell(nr, 5, str(row.get('Part Name', '')) or '')
-            ws.cell(nr, 6, float(row.get('Cost', 0)))
-            ws.cell(nr, 7, str(row.get('PO No', '')) or '')
-            ws.cell(nr, 8, s(row.get('Attached Order No')))
-            ws.cell(nr, 9, s(row.get('Attached Customer')))
-            ws.cell(nr, 10, str(row.get('PO Created Date', '')) or '')
-            ws.cell(nr, 11, str(row.get('Supplier/ Collection?', '')) or '')
-            ws.cell(nr, 12, s(row.get('Item Count')))
-            ws.cell(nr, 13, s(row.get('Goods Received')))
-            ws.cell(nr, 14, str(row.get('Target Depot', '')) or '')
-            ws.cell(nr, 15, str(row.get('Assigned Depot', '')) or '')
-            ws.cell(nr, 16, str(row.get('Supplier Ref', '')) or '')
-            ws.cell(nr, 17, str(row.get('Custom Ref', '')) or '')
-            ws.cell(nr, 18, row.get('Area', '') or '')
-            nr += 1
+        ws = wb[sn]
+        nr = nextrow.get(sn, 2)
+        po = row['po_created_date']
+        ws.cell(nr, 1, row['supplier'] or '')
+        ws.cell(nr, 2, row['supplier_source_depot'] or '')
+        ws.cell(nr, 3, row['system_no'] or '')
+        ws.cell(nr, 4, row['supplier_pn'] or '')
+        ws.cell(nr, 5, row['part_name'] or '')
+        ws.cell(nr, 6, float(row['cost'] or 0))
+        ws.cell(nr, 7, row['po_no'] or '')
+        ws.cell(nr, 8, row['attached_order_no'])
+        ws.cell(nr, 9, row['attached_customer'])
+        ws.cell(nr, 10, str(po) if po else '')
+        ws.cell(nr, 11, row['supply_type'] or '')
+        ws.cell(nr, 12, row['item_count'])
+        ws.cell(nr, 13, row['goods_received'])
+        ws.cell(nr, 14, row['target_depot'] or '')
+        ws.cell(nr, 15, row['assigned_depot'] or '')
+        ws.cell(nr, 16, row['supplier_ref'] or '')
+        ws.cell(nr, 17, row['custom_ref'] or '')
+        ws.cell(nr, 18, row['area'] or '')
+        nextrow[sn] = nr + 1
 
     wb.save(out_xlsx)
 
-    # ── verify balance ──
+    # ── verify balance + PDF ──
     wb2 = load_workbook(out_xlsx)
     cover2 = wb2['Cover']
 
@@ -209,10 +206,8 @@ def build(csv_path, report_date: dt.date, base_path: Path, fixed_wd=FIXED_WD):
         except (TypeError, ValueError):
             return 0.0
 
-    top_rows = list(range(3, 36, 2))
-    bot_rows = list(COVER_BOTTOM_ROW.values())
-    top = sum(g2(r, today_col) for r in top_rows)
-    bot = sum(g2(r, today_col) for r in bot_rows)
+    top = sum(g2(r, today_col) for r in range(3, 36, 2))
+    bot = sum(g2(r, today_col) for r in COVER_BOTTOM_ROW.values())
     diff = abs(top - bot)
     print(f"Balance: top £{top:,.2f}  bottom £{bot:,.2f}  "
           f"{'BALANCED' if diff < 0.01 else f'GAP £{diff:,.2f}'}")
@@ -221,8 +216,7 @@ def build(csv_path, report_date: dt.date, base_path: Path, fixed_wd=FIXED_WD):
                today_col, days_elapsed, days_remaining, wd)
     print(f"Saved: {out_xlsx.name}")
     print(f"Saved: {out_pdf.name}")
-    daily_total = top
-    return out_xlsx, out_pdf, diff, daily_total, report_date_long, df
+    return out_xlsx, out_pdf, diff, top, report_date_long
 
 
 # ── PDF (ported from original, budgets read from sheet) ─────────────
@@ -399,13 +393,10 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python build_report.py <csv> <report_date YYYY-MM-DD> [base_xlsx]")
+    if len(sys.argv) < 2:
+        print("Usage: python build_report.py <report_date YYYY-MM-DD>")
         sys.exit(1)
-    csv_path = sys.argv[1]
-    report_date = dt.date.fromisoformat(sys.argv[2])
-    base_path = Path(sys.argv[3]) if len(sys.argv) > 3 else (HERE / "base_report.xlsx")
-    build(csv_path, report_date, base_path)
+    build(dt.date.fromisoformat(sys.argv[1]))
 
 
 if __name__ == "__main__":

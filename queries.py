@@ -76,6 +76,28 @@ def monthly_totals(n=18):
     return [{"ym": ym, "total": float(t)} for ym, t in rows]
 
 
+def month_rows(y, m):
+    """Every transaction line of the month — for rebuilding the workbook cover."""
+    first, nxt = _bounds(y, m)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""SELECT report_date, division, area, plate, supplier, cost
+                       FROM transactions WHERE report_date >= %s AND report_date < %s""",
+                    (first, nxt))
+        return cur.fetchall()
+
+
+def day_tab_rows(d):
+    """A single day's transactions, for the division tabs in the workbook."""
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""SELECT division, supplier, supplier_source_depot, system_no, supplier_pn,
+                              part_name, cost, po_no, attached_order_no, attached_customer,
+                              po_created_date, supply_type, item_count, goods_received,
+                              target_depot, assigned_depot, supplier_ref, custom_ref, area
+                       FROM transactions WHERE report_date = %s ORDER BY division""", (d,))
+        cols = [dd[0] for dd in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
 def recent_transactions(y, m, limit=60):
     first, nxt = _bounds(y, m)
     with get_conn() as c, c.cursor() as cur:
