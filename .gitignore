@@ -1,0 +1,30 @@
+# Secrets — never commit these
+.env
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Downloaded data & generated reports
+downloads/
+*.csv
+fox_transaction_report_*.xlsx
+daily_kpi_report_*.pdf
+
+# Rolling state (persistent volume in prod) + real-figure seed
+state/
+base_report.xlsx
+
+# One-off dev / inspection scripts + artefacts
+inspect_autovolt.py
+inspect_vrm.py
+inspect_report.py
+inspect_hidden.py
+find_supplier_report.py
+compare_vrm.py
+check_resend.py
+add_domain.py
+page_dump.html
+network_log.txt
+network_interesting.txt

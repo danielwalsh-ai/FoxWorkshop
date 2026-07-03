@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 150" role="img" aria-label="Fox Group">
+  <text x="0" y="114" font-family="'Arial Black','Helvetica Neue',Arial,sans-serif" font-weight="900" font-size="122" letter-spacing="-5" fill="#ffffff">FOX</text>
+  <path d="M292 73 H470 L503 100 L470 127 H292 Z" fill="#eb941f"/>
+  <text x="312" y="111" font-family="'Arial Black',Arial,sans-serif" font-weight="800" font-size="35" letter-spacing="2" fill="#ffffff">GROUP</text>
+  <path d="M509 79 L530 100 L509 121" fill="none" stroke="#94c21f" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M527 79 L548 100 L527 121" fill="none" stroke="#94c21f" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

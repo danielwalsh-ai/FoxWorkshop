@@ -1,0 +1,32 @@
+# Python env / caches
+venv/
+__pycache__/
+*.pyc
+
+# Secrets (provided as Coolify env vars instead)
+.env
+
+# Git
+.git/
+.gitignore
+
+# One-off / scratch scripts + inspection artefacts
+inspect_autovolt.py
+inspect_vrm.py
+inspect_report.py
+inspect_hidden.py
+find_supplier_report.py
+compare_vrm.py
+check_resend.py
+add_domain.py
+page_dump.html
+network_log.txt
+network_interesting.txt
+
+# Generated data (rebuilt at runtime / kept in a persistent volume)
+SupplierTransaction.csv
+backfill*.csv
+downloads/
+state/
+fox_transaction_report_*.xlsx
+daily_kpi_report_*.pdf

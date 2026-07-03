@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fox Group — Workshop &amp; Maintenance</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --fox-navy:#24214a; --fox-orange:#eb941f; --fox-green:#94c21f; --fox-blue:#00579e;
+      --red:#c0392b; --teal:#16a085; --white:#fff;
+      --gray-50:#f8f8fb; --gray-100:#eeeeee; --gray-200:#e0e0e8; --gray-400:#9a9aaa; --gray-600:#5a5a72;
+    }
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--gray-50);color:var(--fox-navy);min-height:100vh}
+    /* nav */
+    nav{background:var(--fox-navy);height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 2rem;position:sticky;top:0;z-index:100}
+    .nav-left{display:flex;align-items:center;gap:14px}
+    .logo-img{height:30px;display:block}
+    .logo-fallback{display:none;align-items:center;gap:10px}
+    .logo-mark{width:32px;height:32px;background:var(--fox-orange);border-radius:7px;display:flex;align-items:center;justify-content:center}
+    .logo-mark i{font-size:18px;color:#fff}
+    .nav-divider{width:1px;height:26px;background:rgba(255,255,255,.2)}
+    .nav-title{color:#fff;font-size:14px;font-weight:600}
+    .nav-title span{display:block;font-size:10px;color:var(--fox-orange);text-transform:uppercase;letter-spacing:.08em;font-weight:500}
+    .nav-right{display:flex;align-items:center;gap:1rem}
+    .nav-btn{background:none;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.75);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit;text-decoration:none;display:flex;align-items:center;gap:5px;transition:all .15s}
+    .nav-btn:hover{background:rgba(255,255,255,.08);color:#fff}
+    select.month{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;cursor:pointer}
+    select.month option{color:#000}
+    /* layout */
+    main{max-width:1180px;margin:0 auto;padding:2.5rem 2rem}
+    .page-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:1.75rem}
+    .page-head h1{font-size:1.6rem;font-weight:700;letter-spacing:-.02em}
+    .page-head .sub{font-size:.85rem;color:var(--gray-400);margin-top:2px}
+    .section-label{font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin:2rem 0 .9rem}
+    /* KPI cards */
+    .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:1rem}
+    .card{border-radius:13px;padding:1.1rem 1.2rem;color:#fff;position:relative;overflow:hidden}
+    .card .lbl{font-size:.72rem;font-weight:600;opacity:.9;text-transform:uppercase;letter-spacing:.05em}
+    .card .val{font-size:1.5rem;font-weight:700;margin-top:.5rem;letter-spacing:-.02em}
+    .card .sub{font-size:.68rem;opacity:.75;margin-top:.35rem}
+    .c-blue{background:var(--fox-blue)} .c-red{background:var(--red)} .c-navy{background:var(--fox-navy)}
+    .c-teal{background:var(--teal)} .c-orange{background:var(--fox-orange)}
+    /* panels */
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
+    .panel{background:#fff;border:1.5px solid var(--gray-100);border-radius:14px;padding:1.4rem 1.5rem}
+    .panel h3{font-size:.95rem;font-weight:600;margin-bottom:1rem;display:flex;align-items:center;gap:8px}
+    .panel h3 i{color:var(--fox-orange)}
+    table{width:100%;border-collapse:collapse;font-size:.83rem}
+    th{text-align:left;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-400);font-weight:600;padding:6px 8px;border-bottom:1.5px solid var(--gray-100)}
+    td{padding:7px 8px;border-bottom:1px solid var(--gray-50)}
+    td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+    tr:hover td{background:var(--gray-50)}
+    .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:.7rem;font-weight:600}
+    .pos{color:#1c7c4c;background:#e8f6ee} .neg{color:var(--red);background:#fdecea} .warn{color:#a86500;background:#fdf3e2}
+    .bar{height:6px;border-radius:4px;background:var(--gray-100);overflow:hidden;margin-top:5px}
+    .bar > i{display:block;height:100%;border-radius:4px}
+    /* trend chart */
+    .trend{display:flex;align-items:flex-end;gap:6px;height:150px;padding-top:10px}
+    .trend .col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+    .trend .bk{width:100%;background:linear-gradient(var(--fox-blue),#3d7bb5);border-radius:4px 4px 0 0;transition:opacity .15s;min-height:2px}
+    .trend .col:hover .bk{background:var(--fox-orange)}
+    .trend .mlbl{font-size:.6rem;color:var(--gray-400);margin-top:5px;white-space:nowrap}
+    .foot{margin-top:2.5rem;text-align:center;color:var(--gray-400);font-size:.72rem}
+    @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <img src="/static/fox-logo-white.png" alt="Fox Group" class="logo-img" id="brandLogo"
+           onerror="this.style.display='none';document.getElementById('navdiv').style.display='none';">
+      <div class="nav-divider" id="navdiv"></div>
+      <div class="nav-title">Workshop &amp; Maintenance<span>Fox Group</span></div>
+    </div>
+    <div class="nav-right">
+      <form method="get" style="margin:0">
+        <select class="month" name="month" onchange="this.form.submit()">
+          {% for mo in months %}
+          <option value="{{ mo }}" {% if mo == month %}selected{% endif %}>{{ mo }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      <a class="nav-btn" href="/hub"><i class="ti ti-arrow-left"></i> Hub</a>
+    </div>
+  </nav>
+
+  <main>
+    <div class="page-head">
+      <div>
+        <h1>Workshop &amp; Maintenance Spend</h1>
+        <div class="sub">{{ month_label }} &middot; {{ days }} day{{ '' if days == 1 else 's' }} with activity</div>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card c-blue"><div class="lbl">Month Total</div><div class="val">{{ total|money }}</div><div class="sub">across all divisions</div></div>
+      <div class="card c-red"><div class="lbl">Damage</div><div class="val">{{ damage|money }}</div></div>
+      <div class="card c-navy"><div class="lbl">Tyres</div><div class="val">{{ tyres|money }}</div></div>
+      <div class="card c-teal"><div class="lbl">Windscreen / Glass</div><div class="val">{{ windscreen|money }}</div></div>
+      <div class="card c-orange"><div class="lbl">Capital</div><div class="val">{{ capital|money }}</div></div>
+    </div>
+
+    <div class="section-label">Budget Tracker — {{ month_label }}</div>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Division</th><th class="num">Budget</th><th class="num">Spent (MTD)</th><th class="num">Remaining</th><th style="width:22%">Used</th></tr></thead>
+        <tbody>
+        {% for b in budget_rows %}
+          <tr>
+            <td>{{ b.division }}</td>
+            <td class="num">{{ b.budget|money0 }}</td>
+            <td class="num">{{ b.spent|money }}</td>
+            <td class="num">
+              {% if b.remaining < 0 %}<span class="pill neg">{{ b.remaining|money }}</span>
+              {% elif b.pct > 70 %}<span class="pill warn">{{ b.remaining|money }}</span>
+              {% else %}<span class="pill pos">{{ b.remaining|money }}</span>{% endif %}
+            </td>
+            <td>
+              <div class="bar"><i style="width:{{ 100 if b.pct > 100 else b.pct }}%;
+                background:{{ 'var(--red)' if b.remaining < 0 else ('var(--fox-orange)' if b.pct > 70 else 'var(--fox-green)') }}"></i></div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section-label">Spend Trend (last {{ trend|length }} months)</div>
+    <div class="panel">
+      <div class="trend">
+        {% for t in trend %}
+        <div class="col" title="{{ t.ym }}: {{ t.total|money }}">
+          <div class="bk" style="height:{{ (t.total / trend_peak * 100)|round(1) }}%"></div>
+          <div class="mlbl">{{ t.ym[2:] }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top:1.25rem">
+      <div class="panel">
+        <h3><i class="ti ti-building-warehouse"></i> Spend by Division</h3>
+        <table>
+          <thead><tr><th>Division</th><th class="num">Spend</th></tr></thead>
+          <tbody>
+          {% for d in div_rows %}
+            <tr><td>{{ d.division }}</td><td class="num">{{ d.total|money }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3><i class="ti ti-truck"></i> Spend by Area</h3>
+        <table>
+          <thead><tr><th>Area</th><th class="num">Spend</th></tr></thead>
+          <tbody>
+          {% for a in area_rows %}
+            <tr><td>{{ a.area }}</td><td class="num">{{ a.total|money }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section-label">Top Transactions — {{ month_label }}</div>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Date</th><th>Supplier</th><th>Part</th><th>Division</th><th>Area</th><th>Reg</th><th class="num">Cost</th></tr></thead>
+        <tbody>
+        {% for t in transactions %}
+          <tr>
+            <td>{{ t.po_created_date.strftime('%d %b') if t.po_created_date else '' }}</td>
+            <td>{{ t.supplier or '' }}</td>
+            <td>{{ (t.part_name or '')[:38] }}</td>
+            <td>{{ t.division or '' }}</td>
+            <td>{{ t.area or '' }}</td>
+            <td>{{ t.vehicle_reg or '' }}</td>
+            <td class="num">{{ t.cost|money }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="foot">Fox Group Ltd — Workshop &amp; Maintenance &middot; data from Autovolt &middot; prepared by Knowles Farm Ltd</div>
+  </main>
+</body>
+</html>
