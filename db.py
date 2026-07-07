@@ -78,6 +78,15 @@ CREATE TABLE IF NOT EXISTS budgets (
   budget NUMERIC(12,2) NOT NULL,
   PRIMARY KEY (division, year, month)
 );
+
+-- Manual reclassifications by PO number (survive re-ingestion).
+CREATE TABLE IF NOT EXISTS overrides (
+  po_no TEXT PRIMARY KEY,
+  division TEXT,
+  area TEXT,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
 """
 
 TX_COLS = [
@@ -142,6 +151,7 @@ def ingest(df, report_date: dt.date):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM transactions WHERE report_date = %s", (report_date,))
         _insert(cur, rows)
+    apply_overrides()
     print(f"Ingested {len(rows)} rows for {report_date}")
     return len(rows)
 
@@ -153,8 +163,33 @@ def ingest_bulk(df):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM transactions WHERE report_date BETWEEN %s AND %s", (dmin, dmax))
         _insert(cur, rows)
+    apply_overrides()
     print(f"Bulk-ingested {len(rows)} rows across {dmin} .. {dmax}")
     return len(rows)
+
+
+def add_override(po_no, division=None, area=None, note=None):
+    """Pin a PO to a division/area — persists across re-ingestion."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO overrides (po_no, division, area, note) VALUES (%s,%s,%s,%s)
+               ON CONFLICT (po_no) DO UPDATE SET division=EXCLUDED.division,
+                                                 area=EXCLUDED.area, note=EXCLUDED.note""",
+            (po_no, division, area, note))
+    print(f"Override set: {po_no} -> division={division} area={area}")
+
+
+def apply_overrides():
+    """Re-apply all manual overrides onto the transactions table."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE transactions t
+                       SET division = COALESCE(o.division, t.division),
+                           area     = COALESCE(o.area, t.area)
+                       FROM overrides o WHERE t.po_no = o.po_no""")
+        n = cur.rowcount
+    if n:
+        print(f"Applied overrides to {n} rows")
+    return n
 
 
 def upsert_budgets(budget_map, year, month):

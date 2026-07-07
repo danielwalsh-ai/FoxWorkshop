@@ -161,6 +161,17 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         if budget:
             cover.cell(rn, REMAIN_COL, round(budget - get_mtd(rn), 2))
 
+    # ── column totals + MTD written as VALUES, not =SUM() formulas ──
+    # (Excel formulas in openpyxl-generated files kept showing blank / "breaking";
+    #  hard numbers always display correctly, everywhere.)
+    div_rows_all = list(range(3, 36, 2))
+    area_rows_all = list(COVER_BOTTOM_ROW.values())
+    for col in range(2, today_col + 1):
+        cover.cell(37, col, round(sum(gcv(r, col) for r in div_rows_all), 2))              # Total row
+        cover.cell(BOT_TOTAL_ROW, col, round(sum(gcv(r, col) for r in area_rows_all), 2))  # Area Total row
+    for rn in INFO_ROWS + area_rows_all + [37, BOT_TOTAL_ROW]:
+        cover.cell(rn, MTD_COL, round(sum(gcv(rn, c) for c in range(2, today_col + 1)), 2))
+
     # write the day's transactions into the division tabs
     tabmap = {s.strip(): s for s in wb.sheetnames}
     nextrow = {}
