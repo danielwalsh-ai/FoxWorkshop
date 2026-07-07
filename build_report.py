@@ -101,8 +101,8 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
             cover.cell(r, c, 0)
 
     def col_for(d):
-        # weekend/holiday-dated lines fold into the prior working-day column
-        return working_day_index(last_working_day(d)) + 1
+        # Cover columns are calendar days: col 2 = 1st ... col 32 = 31st.
+        return d.day + 1
 
     # whitespace-tolerant lookups (DB strips names; some labels e.g.
     # 'Asphalt Plant ' carry a trailing space in the workbook)

@@ -16,7 +16,6 @@ import sys
 import datetime as dt
 from pathlib import Path
 
-from date_args import is_working_day
 from scrape_autovolt import scrape
 from classify import process_csv
 from build_report import build
@@ -34,11 +33,8 @@ def pick_report_date(today: dt.date) -> dt.date:
 def run(report_date: dt.date, send=True):
     print(f"=== Daily run: reporting on {report_date} ({report_date:%A})"
           f"{'' if send else '  [DRY RUN - no email]'} ===")
-    if not is_working_day(report_date):
-        print(f"{report_date} is a weekend / bank holiday — skipping.")
-        return 0
 
-    # 1. scrape the day
+    # 1. scrape the day (runs every day — weekends included, even if zero)
     scrape(report_date.isoformat(), report_date.isoformat())
     csv_path = HERE / "SupplierTransaction.csv"
 

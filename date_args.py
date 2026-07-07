@@ -59,11 +59,13 @@ def compute(report_date: dt.date, fixed_wd: int | None = None) -> dict:
     wd_total = fixed_wd if fixed_wd else working_days_in_month(report_date.year, report_date.month)
     return {
         "report_date": report_date.isoformat(),
-        "today_col": idx + 1,          # col 2 = 1st working day
+        # Cover columns are CALENDAR days: col 2 = 1st, col 3 = 2nd, ... col 32 = 31st.
+        "today_col": report_date.day + 1,
+        # days elapsed/remaining stay WORKING days (for budget pacing).
         "days_elapsed": idx,
         "days_remaining": wd_total - idx,
         "working_days_in_month": wd_total,
-        "is_new_month": idx == 1,      # report date is the 1st working day
+        "is_new_month": report_date.day == 1,
         "is_working_day": is_working_day(report_date),
     }
 
