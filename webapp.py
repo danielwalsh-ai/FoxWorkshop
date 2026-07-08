@@ -74,6 +74,25 @@ def api_overview(month: str | None = None):
     return {"month": month, **queries.overview(y, m)}
 
 
+@app.post("/api/refresh")
+def refresh():
+    """Pull today's latest from Autovolt and load it into the database
+    (dashboard data only — does not rebuild/email the report)."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+    from scrape_autovolt import scrape
+    from classify import process_csv
+    import db
+    try:
+        today = dt.datetime.now(ZoneInfo("Europe/London")).date()
+        scrape(today.isoformat(), today.isoformat())
+        df = process_csv(HERE / "SupplierTransaction.csv", today)
+        rows = db.ingest(df, today)
+        return {"ok": True, "date": today.isoformat(), "rows": rows}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/health")
 def health():
     return {"ok": True}

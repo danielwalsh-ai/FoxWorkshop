@@ -82,6 +82,7 @@
           {% endfor %}
         </select>
       </form>
+      <button class="nav-btn" type="button" id="refreshBtn" onclick="doRefresh()"><i class="ti ti-refresh"></i> Refresh</button>
       <a class="nav-btn" href="/hub"><i class="ti ti-arrow-left"></i> Hub</a>
     </div>
   </nav>
@@ -186,5 +187,22 @@
 
     <div class="foot">Fox Group Ltd — Workshop &amp; Maintenance &middot; data from Autovolt &middot; prepared by Knowles Farm Ltd</div>
   </main>
+  <script>
+    async function doRefresh() {
+      const b = document.getElementById('refreshBtn');
+      const orig = b.innerHTML;
+      b.disabled = true; b.style.opacity = 0.6;
+      b.innerHTML = '<i class="ti ti-loader-2"></i> Refreshing…';
+      try {
+        const r = await fetch('/api/refresh', { method: 'POST' });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'failed');
+        location.reload();
+      } catch (e) {
+        b.disabled = false; b.style.opacity = 1; b.innerHTML = orig;
+        alert('Refresh failed — please try again in a moment.');
+      }
+    }
+  </script>
 </body>
 </html>
