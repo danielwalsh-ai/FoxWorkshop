@@ -80,7 +80,7 @@ def month_rows(y, m):
     """Every transaction line of the month — for rebuilding the workbook cover."""
     first, nxt = _bounds(y, m)
     with get_conn() as c, c.cursor() as cur:
-        cur.execute("""SELECT report_date, division, area, plate, supplier, cost
+        cur.execute("""SELECT report_date, division, area, plate, supplier, cost, vehicle_reg
                        FROM transactions WHERE report_date >= %s AND report_date < %s""",
                     (first, nxt))
         return cur.fetchall()

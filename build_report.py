@@ -27,6 +27,7 @@ from reportlab.platypus import Table, TableStyle
 from classify import (
     COVER_TOP_ROW, COVER_BOTTOM_ROW, INFO_ROWS, SCANIA_ROW, VOLVO_ROW, CAPITAL_ROW,
     PRE24_ROW, R24_ROW, R25_ROW, BOT_TOTAL_ROW, TOP_SHEETS, sheet_to_row, PLATE_ROWS,
+    reg_year,
 )
 from date_args import compute as compute_dates, working_day_index, last_working_day
 import queries
@@ -95,7 +96,14 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         if ws.max_row > 1:
             ws.delete_rows(2, ws.max_row)
 
-    data_rows = list(range(3, 36, 2)) + INFO_ROWS + list(COVER_BOTTOM_ROW.values())
+    # Registration-year rows, added below the main cover layout (rows 72-79)
+    YEAR_ROWS = [(2021, 72), (2022, 73), (2023, 74), (2024, 75), (2025, 76), (2026, 77)]
+    PRE2021_ROW = 78
+    YEAR_TOTAL_ROW = 79
+    year_row_of = {yr: r for yr, r in YEAR_ROWS}
+    all_year_rows = [r for _, r in YEAR_ROWS] + [PRE2021_ROW]
+
+    data_rows = list(range(3, 36, 2)) + INFO_ROWS + list(COVER_BOTTOM_ROW.values()) + all_year_rows
     for r in data_rows:
         for c in range(2, today_col + 1):
             cover.cell(r, c, 0)
@@ -116,7 +124,7 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     def add(row, col, cost):
         acc[(row, col)] = acc.get((row, col), 0.0) + cost
 
-    for rdate, division, area, plate, supplier, cost in queries.month_rows(y, m):
+    for rdate, division, area, plate, supplier, cost, vehicle_reg in queries.month_rows(y, m):
         col = col_for(rdate)
         if col < 2 or col > today_col:
             continue
@@ -133,6 +141,11 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
             prow = PLATE_ROWS.get(plate)
             if prow:
                 add(prow, col, cost)
+            yr = reg_year(vehicle_reg or '')
+            if yr:
+                yrow = year_row_of.get(yr) or (PRE2021_ROW if yr < 2021 else None)
+                if yrow:
+                    add(yrow, col, cost)
         sup = (supplier or '').upper()
         if 'SCANIA' in sup:
             add(SCANIA_ROW, col, cost)
@@ -171,6 +184,18 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         cover.cell(BOT_TOTAL_ROW, col, round(sum(gcv(r, col) for r in area_rows_all), 2))  # Area Total row
     for rn in INFO_ROWS + area_rows_all + [37, BOT_TOTAL_ROW]:
         cover.cell(rn, MTD_COL, round(sum(gcv(rn, c) for c in range(2, today_col + 1)), 2))
+
+    # ── Spend by Registration Year block (rows 71-79) ──
+    cover.cell(71, 1, 'SPEND BY REGISTRATION YEAR')
+    for yr, r in YEAR_ROWS:
+        cover.cell(r, 1, str(yr))
+        cover.cell(r, MTD_COL, get_mtd(r))
+    cover.cell(PRE2021_ROW, 1, 'Pre-2021')
+    cover.cell(PRE2021_ROW, MTD_COL, get_mtd(PRE2021_ROW))
+    cover.cell(YEAR_TOTAL_ROW, 1, 'Registration Year Total')
+    for col in range(2, today_col + 1):
+        cover.cell(YEAR_TOTAL_ROW, col, round(sum(gcv(r, col) for r in all_year_rows), 2))
+    cover.cell(YEAR_TOTAL_ROW, MTD_COL, get_mtd(YEAR_TOTAL_ROW))
 
     # write the day's transactions into the division tabs
     tabmap = {s.strip(): s for s in wb.sheetnames}
