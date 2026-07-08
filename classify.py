@@ -43,6 +43,20 @@ def extract_reg(ref):
     return m.group(0) if m else None
 
 
+def reg_year(ref):
+    """UK registration YEAR from a reg (or a ref containing one).
+    Current-style plates only ([A-Z]{2}\\d{2}[A-Z]{3}); None otherwise.
+    e.g. PO26xxx / PO76xxx -> 2026, PN20xxx / PN70xxx -> 2020."""
+    reg = extract_reg(ref)
+    if not reg:
+        return None
+    m = re.match(r'[A-Z]{2}(\d{2})[A-Z]{3}', reg)
+    if not m:
+        return None
+    num = int(m.group(1))
+    return 2000 + (num - 50) if num >= 51 else 2000 + num
+
+
 def get_area(row, reg_to_area):
     cr = str(row.get('Custom Ref', '')); sr = str(row.get('Supplier Ref', ''))
     for ref in [cr, sr]:

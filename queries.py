@@ -98,6 +98,31 @@ def day_tab_rows(d):
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
+def reg_year_split(report_date):
+    """Vehicle spend by registration year — today + month-to-date.
+    Returns (today_by_year, mtd_by_year) dicts keyed by year int."""
+    from collections import defaultdict
+    from classify import reg_year, TOP_SHEETS
+    TOP = {s.strip() for s in TOP_SHEETS}
+    first, _ = _bounds(report_date.year, report_date.month)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""SELECT report_date, division, vehicle_reg, cost FROM transactions
+                       WHERE report_date >= %s AND report_date <= %s""", (first, report_date))
+        rows = cur.fetchall()
+    today, mtd = defaultdict(float), defaultdict(float)
+    for rd, division, reg, cost in rows:
+        if (division or '').strip() not in TOP:
+            continue
+        yr = reg_year(reg or '')
+        if not yr:
+            continue
+        cost = float(cost or 0)
+        mtd[yr] += cost
+        if rd == report_date:
+            today[yr] += cost
+    return dict(today), dict(mtd)
+
+
 def recent_transactions(y, m, limit=60):
     first, nxt = _bounds(y, m)
     with get_conn() as c, c.cursor() as cur:

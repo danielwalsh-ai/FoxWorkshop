@@ -223,8 +223,9 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     print(f"Balance: top £{top:,.2f}  bottom £{bot:,.2f}  "
           f"{'BALANCED' if diff < 0.01 else f'GAP £{diff:,.2f}'}")
 
+    year_today, year_mtd = queries.reg_year_split(report_date)
     _build_pdf(out_pdf, cover2, g2, report_date, report_date_long,
-               today_col, days_elapsed, days_remaining, wd)
+               today_col, days_elapsed, days_remaining, wd, year_today, year_mtd)
     print(f"Saved: {out_xlsx.name}")
     print(f"Saved: {out_pdf.name}")
     return out_xlsx, out_pdf, diff, top, report_date_long
@@ -232,7 +233,7 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
 
 # ── PDF (ported from original, budgets read from sheet) ─────────────
 def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
-               DAYS_ELAPSED, DAYS_REMAINING, WD):
+               DAYS_ELAPSED, DAYS_REMAINING, WD, year_today=None, year_mtd=None):
     NAVY = colors.HexColor('#24214a'); ORANGE = colors.HexColor('#eb941f')
     BLUE = colors.HexColor('#00579e'); WHITE = colors.white
     LIGHT = colors.HexColor('#F2F3F7'); GREY = colors.HexColor('#666666')
@@ -328,7 +329,7 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
                 ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
 
     # Page 1
-    chrome(1, 2); y = YT
+    chrome(1, 3); y = YT
     sec_lbl(y, "TODAY'S SPEND"); y -= LH + G
     draw_cards(y, CARD_H, [("Today's Total", fmt(daily_total), BLUE, ''),
         ('Damage', fmt(daily_damage), RED, ''), ('Tyres', fmt(daily_tyres), NAVY, ''),
@@ -375,8 +376,8 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     btbl = Table(bgt_data, colWidths=bgt_cols, rowHeights=RH_B)
     btbl.setStyle(TableStyle(bgt_sty)); btbl.wrapOn(cv, W, H); btbl.drawOn(cv, M, y - BGT_H)
 
-    # Page 2
-    cv.showPage(); chrome(2, 2); y = YT
+    # Page 2 — Month-to-Date + Spend by Registration Year
+    cv.showPage(); chrome(2, 3); y = YT
     sec_lbl(y, f'Month-to-Date — {mo_name} {REPORT_DATE.split()[-1]}'); y -= LH + G
     draw_cards(y, CARD_H, [('MTD Total', fmt(mtd_total), BLUE, f'{DAYS_ELAPSED} of {WD} working days'),
         ('MTD Damage', fmt(mtd_damage), RED, ''), ('MTD Tyres', fmt(mtd_tyres), NAVY, '')], 3)
@@ -384,8 +385,31 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     draw_cards(y, CARD_H, [('MTD Capital', fmt(mtd_capital), ORANGE, ''),
         ('Daily Average', fmt(daily_avg), GREEN, f'Target {fmts(mtd_total / WD)} over {WD} days'),
         ('Biggest Day', fmt(bd_val), PURPLE, f'{bd_lbl}')], 3)
-    y -= CARD_H + G + PAD2
+    y -= CARD_H + G + 6 * mm
 
+    sec_lbl(y, 'Spend by Registration Year (vehicle spend)'); y -= LH + G
+    yt = year_today or {}
+    ym = year_mtd or {}
+    yr_data = [['Registration Year', "Today's Spend", 'Month-to-Date']]
+    tot_t = tot_m = 0.0
+    for yr in (2021, 2022, 2023, 2024, 2025, 2026):
+        t = yt.get(yr, 0.0); mt = ym.get(yr, 0.0)
+        yr_data.append([str(yr), fmt(t), fmt(mt)]); tot_t += t; tot_m += mt
+    older_t = sum(v for k, v in yt.items() if k and k < 2021)
+    older_m = sum(v for k, v in ym.items() if k and k < 2021)
+    if older_m:
+        yr_data.append(['Pre-2021', fmt(older_t), fmt(older_m)]); tot_t += older_t; tot_m += older_m
+    yr_data.append(['Total (identified vehicles)', fmt(tot_t), fmt(tot_m)])
+    n_yr = len(yr_data)
+    yr_sty = base_tbl() + [('BACKGROUND', (0, n_yr - 1), (-1, n_yr - 1), colors.HexColor('#E0E3EE')),
+                           ('FONTNAME', (0, n_yr - 1), (-1, n_yr - 1), 'Helvetica-Bold'),
+                           ('LINEABOVE', (0, n_yr - 1), (-1, n_yr - 1), 0.5, NAVY)]
+    yr_tbl = Table(yr_data, colWidths=[70 * mm, 58 * mm, 58 * mm], rowHeights=RH_B)
+    yr_tbl.setStyle(TableStyle(yr_sty)); yr_tbl.wrapOn(cv, W, H)
+    yr_tbl.drawOn(cv, M, y - n_yr * RH_B)
+
+    # Page 3 — Day-by-Day Summary
+    cv.showPage(); chrome(3, 3); y = YT
     sec_lbl(y, 'Day-by-Day Summary'); y -= LH + G
     dcols = [28 * mm, 40 * mm, 32 * mm, 32 * mm, 32 * mm, 22 * mm]
     ddata = [['Date', 'Total Spend', 'Damage', 'Tyres', 'Capital', 'Daily Avg']]
