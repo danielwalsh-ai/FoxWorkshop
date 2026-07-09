@@ -87,6 +87,14 @@ CREATE TABLE IF NOT EXISTS overrides (
   note TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Reply-agent bookkeeping: which email replies have been handled.
+CREATE TABLE IF NOT EXISTS processed_replies (
+  message_id TEXT PRIMARY KEY,
+  handled_at TIMESTAMP DEFAULT NOW(),
+  reply_type TEXT,
+  action TEXT
+);
 """
 
 TX_COLS = [
@@ -190,6 +198,37 @@ def apply_overrides():
     if n:
         print(f"Applied overrides to {n} rows")
     return n
+
+
+# ── reply-agent helpers ──
+def is_processed(message_id):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM processed_replies WHERE message_id = %s", (message_id,))
+        return cur.fetchone() is not None
+
+
+def mark_processed(message_id, reply_type=None, action=None):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""INSERT INTO processed_replies (message_id, reply_type, action)
+                       VALUES (%s,%s,%s) ON CONFLICT (message_id) DO NOTHING""",
+                    (message_id, reply_type, action))
+
+
+def run_select(sql):
+    """Run a read-only SELECT/WITH; returns (columns, rows). Rejects anything else."""
+    if not sql.strip().upper().startswith(("SELECT", "WITH")):
+        raise ValueError("Only SELECT statements are allowed")
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        cols = [d[0] for d in cur.description]
+        return cols, cur.fetchall()
+
+
+def po_report_date(po_no):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT MIN(report_date) FROM transactions WHERE po_no = %s", (po_no,))
+        r = cur.fetchone()
+        return r[0] if r and r[0] else None
 
 
 def upsert_budgets(budget_map, year, month):
