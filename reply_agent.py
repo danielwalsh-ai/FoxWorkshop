@@ -61,11 +61,12 @@ REGISTRATION YEAR — to filter/group by a vehicle's plate year, compute it in S
   (CASE WHEN substring(vehicle_reg from '[0-9][0-9]')::int >= 51 THEN 1950 ELSE 2000 END)
     + substring(vehicle_reg from '[0-9][0-9]')::int
 Only rows where vehicle_reg ~ '^[A-Z][A-Z][0-9][0-9][A-Z][A-Z][A-Z]$' have a valid year.
-CRITICAL: many vehicles have personalised/cherished plates that do NOT encode a real year. Only treat
-the computed year as valid when it is BETWEEN 2001 AND EXTRACT(YEAR FROM CURRENT_DATE); exclude every
-other row from year analysis (never report years like 2038/2040 — they don't exist). "Number of trucks"
-= COUNT(DISTINCT vehicle_reg). For spend-by-year, group only over 2021-2026 and bucket earlier valid
-years as 'pre-2021'. If a result looks implausible, say you'll double-check rather than stating it.
+CRITICAL: ONLY count registration years 2021-2026 as fleet trucks. IGNORE every other row — private/
+cherished plates, older plates (2020 and before) and future years all get excluded (never report years
+like 2020, 2027 or 2038). Always add:
+  AND (CASE WHEN substring(vehicle_reg from '[0-9][0-9]')::int >= 51 THEN 1950 ELSE 2000 END)
+      + substring(vehicle_reg from '[0-9][0-9]')::int BETWEEN 2021 AND 2026
+"Number of trucks" = COUNT(DISTINCT vehicle_reg). If a result looks implausible, say you'll double-check.
 Example — 22-plate spend this month:
   SELECT ROUND(SUM(cost),2) FROM transactions
   WHERE vehicle_reg ~ '^[A-Z][A-Z][0-9][0-9][A-Z][A-Z][A-Z]$'

@@ -44,9 +44,10 @@ def extract_reg(ref):
 
 
 def reg_year(ref):
-    """UK registration YEAR from a reg (or a ref containing one).
-    Current-style plates only ([A-Z]{2}\\d{2}[A-Z]{3}); None otherwise.
-    e.g. PO26xxx / PO76xxx -> 2026, PN20xxx / PN70xxx -> 2020."""
+    """UK registration YEAR from a standard age-identifier plate — but only
+    2021-2026 (fleet trucks). Everything else (older plates, private/cherished
+    plates, future years) returns None and is ignored. Add 2027 here in time.
+    e.g. PO26xxx / PO76xxx -> 2026, PN21xxx / PN71xxx -> 2021."""
     reg = extract_reg(ref)
     if not reg:
         return None
@@ -54,7 +55,8 @@ def reg_year(ref):
     if not m:
         return None
     num = int(m.group(1))
-    return 2000 + (num - 50) if num >= 51 else 2000 + num
+    year = 2000 + (num - 50) if num >= 51 else 2000 + num
+    return year if 2021 <= year <= 2026 else None
 
 
 def get_area(row, reg_to_area):
