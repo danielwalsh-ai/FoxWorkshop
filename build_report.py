@@ -96,11 +96,12 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         if ws.max_row > 1:
             ws.delete_rows(2, ws.max_row)
 
-    # Registration-year rows — 2021-2026 only (below the main cover layout)
+    # Registration-year rows — 2021-2026 + older/private (below the main layout)
     YEAR_ROWS = [(2021, 72), (2022, 73), (2023, 74), (2024, 75), (2025, 76), (2026, 77)]
-    YEAR_TOTAL_ROW = 78
+    OTHER_ROW = 78          # vehicles with a reg that isn't a 2021-2026 plate
+    YEAR_TOTAL_ROW = 79
     year_row_of = {yr: r for yr, r in YEAR_ROWS}
-    all_year_rows = [r for _, r in YEAR_ROWS]
+    all_year_rows = [r for _, r in YEAR_ROWS] + [OTHER_ROW]
 
     data_rows = list(range(3, 36, 2)) + INFO_ROWS + list(COVER_BOTTOM_ROW.values()) + all_year_rows
     for r in data_rows:
@@ -140,11 +141,9 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
             prow = PLATE_ROWS.get(plate)
             if prow:
                 add(prow, col, cost)
-            yr = reg_year(vehicle_reg or '')
-            if yr:
-                yrow = year_row_of.get(yr)
-                if yrow:
-                    add(yrow, col, cost)
+            reg = (vehicle_reg or '').strip()
+            if reg:  # a vehicle line: 2021-2026 -> its year row, else older/private
+                add(year_row_of.get(reg_year(reg), OTHER_ROW), col, cost)
         sup = (supplier or '').upper()
         if 'SCANIA' in sup:
             add(SCANIA_ROW, col, cost)
@@ -189,6 +188,8 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     for yr, r in YEAR_ROWS:
         cover.cell(r, 1, str(yr))
         cover.cell(r, MTD_COL, get_mtd(r))
+    cover.cell(OTHER_ROW, 1, 'Older / private plates')
+    cover.cell(OTHER_ROW, MTD_COL, get_mtd(OTHER_ROW))
     cover.cell(YEAR_TOTAL_ROW, 1, 'Registration Year Total')
     for col in range(2, today_col + 1):
         cover.cell(YEAR_TOTAL_ROW, col, round(sum(gcv(r, col) for r in all_year_rows), 2))
@@ -417,7 +418,9 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     for yr in (2021, 2022, 2023, 2024, 2025, 2026):
         t = yt.get(yr, 0.0); mt = ym.get(yr, 0.0)
         yr_data.append([str(yr), fmt(t), fmt(mt)]); tot_t += t; tot_m += mt
-    yr_data.append(['Total (2021-2026 vehicles)', fmt(tot_t), fmt(tot_m)])
+    ot = yt.get('other', 0.0); om = ym.get('other', 0.0)
+    yr_data.append(['Older / private plates', fmt(ot), fmt(om)]); tot_t += ot; tot_m += om
+    yr_data.append(['Total (all vehicle spend)', fmt(tot_t), fmt(tot_m)])
     n_yr = len(yr_data)
     yr_sty = base_tbl() + [('BACKGROUND', (0, n_yr - 1), (-1, n_yr - 1), colors.HexColor('#E0E3EE')),
                            ('FONTNAME', (0, n_yr - 1), (-1, n_yr - 1), 'Helvetica-Bold'),

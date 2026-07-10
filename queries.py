@@ -113,13 +113,14 @@ def reg_year_split(report_date):
     for rd, division, reg, cost in rows:
         if (division or '').strip() not in TOP:
             continue
-        yr = reg_year(reg or '')
-        if not yr:
+        reg = (reg or '').strip()
+        if not reg:
             continue
+        key = reg_year(reg) or 'other'   # 2021-2026 int, else 'other' (older/private)
         cost = float(cost or 0)
-        mtd[yr] += cost
+        mtd[key] += cost
         if rd == report_date:
-            today[yr] += cost
+            today[key] += cost
     return dict(today), dict(mtd)
 
 
