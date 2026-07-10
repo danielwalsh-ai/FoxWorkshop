@@ -30,6 +30,7 @@ from classify import (
     reg_year,
 )
 from date_args import compute as compute_dates, working_day_index, last_working_day
+from parts_category import CATEGORIES
 import queries
 
 HERE = Path(__file__).parent
@@ -65,6 +66,79 @@ def make_blank_template(base_path: Path, out_path: Path):
             ws.delete_rows(2, ws.max_row)
     wb.save(out_path)
     return out_path
+
+
+def _write_parts_sheet(wb, parts, report_date_long):
+    """Dedicated 'Parts (25 & newer)' tab: category breakdown for 2025/2026
+    plates, life-to-date and this-month, all divisions (incl. Capital fit-out)."""
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    name = 'Parts (25 & newer)'
+    if name in wb.sheetnames:
+        del wb[name]
+    ws = wb.create_sheet(name)
+    NAVY = 'FF24214A'; ORANGE = 'FFEB941F'; LIGHT = 'FFF2F3F7'
+    hdr_font = Font(bold=True, color='FFFFFFFF', size=10)
+    hdr_fill = PatternFill('solid', fgColor=NAVY)
+    title_font = Font(bold=True, color='FF24214A', size=13)
+    note_font = Font(italic=True, color='FF666666', size=9)
+    bold = Font(bold=True, color='FF24214A')
+    money = '£#,##0.00'
+    thin = Side(style='thin', color='FFCCCCCC')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws['A1'] = 'Parts Category Breakdown — 2025 & Newer Trucks'
+    ws['A1'].font = title_font
+    ws['A2'] = (f'Life-to-date spend on 2025/2026-plate vehicles (all divisions, '
+                f'incl. capital fit-out).  As at {report_date_long}.')
+    ws['A2'].font = note_font
+
+    def section(start_row, scope_key, tot_key, tr_key, heading):
+        r = start_row
+        ws.cell(r, 1, heading).font = bold
+        r += 1
+        headers = ['Category', '2025 plate', '2026 plate', 'Total']
+        for ci, h in enumerate(headers, 1):
+            cell = ws.cell(r, ci, h)
+            cell.font = hdr_font; cell.fill = hdr_fill; cell.border = border
+            cell.alignment = Alignment(horizontal='left' if ci == 1 else 'right')
+        r += 1
+        d25 = parts[scope_key][2025]; d26 = parts[scope_key][2026]
+        rowi = 0
+        for cat in CATEGORIES:
+            v25 = round(d25.get(cat, 0.0), 2); v26 = round(d26.get(cat, 0.0), 2)
+            if not v25 and not v26:
+                continue
+            fill = PatternFill('solid', fgColor=LIGHT) if rowi % 2 == 0 else None
+            vals = [cat, v25, v26, round(v25 + v26, 2)]
+            for ci, v in enumerate(vals, 1):
+                cell = ws.cell(r, ci, v)
+                cell.border = border
+                if ci > 1:
+                    cell.number_format = money
+                if fill:
+                    cell.fill = fill
+            r += 1; rowi += 1
+        # total row
+        t25 = parts[tot_key][2025]; t26 = parts[tot_key][2026]
+        totrow = ['TOTAL', t25, t26, round(t25 + t26, 2)]
+        for ci, v in enumerate(totrow, 1):
+            cell = ws.cell(r, ci, v)
+            cell.font = bold; cell.border = border
+            cell.fill = PatternFill('solid', fgColor='FFE0E3EE')
+            if ci > 1:
+                cell.number_format = money
+        r += 1
+        # truck counts
+        ws.cell(r, 1, f"Trucks: {parts[tr_key][2025]} × 2025, "
+                      f"{parts[tr_key][2026]} × 2026").font = note_font
+        return r + 2
+
+    nxt = section(4, 'ltd', 'total_ltd', 'trucks_ltd', 'Life-to-date (since the trucks joined the fleet)')
+    section(nxt, 'mtd', 'total_mtd', 'trucks_mtd', f'This month so far ({report_date_long})')
+
+    ws.column_dimensions['A'].width = 32
+    for col in ('B', 'C', 'D'):
+        ws.column_dimensions[col].width = 15
 
 
 def build(report_date: dt.date, fixed_wd=FIXED_WD):
@@ -225,6 +299,10 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         ws.cell(nr, 18, row['area'] or '')
         nextrow[sn] = nr + 1
 
+    # ── Parts Category breakdown for 2025 & newer trucks (dedicated tab) ──
+    parts = queries.parts_category_split(report_date)
+    _write_parts_sheet(wb, parts, report_date_long)
+
     wb.save(out_xlsx)
 
     # ── verify balance + PDF ──
@@ -248,7 +326,7 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
 
     year_today, year_mtd = queries.reg_year_split(report_date)
     _build_pdf(out_pdf, cover2, g2, report_date, report_date_long,
-               today_col, days_elapsed, days_remaining, wd, year_today, year_mtd)
+               today_col, days_elapsed, days_remaining, wd, year_today, year_mtd, parts)
     print(f"Saved: {out_xlsx.name}")
     print(f"Saved: {out_pdf.name}")
     return out_xlsx, out_pdf, diff, top, report_date_long
@@ -256,7 +334,8 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
 
 # ── PDF (ported from original, budgets read from sheet) ─────────────
 def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
-               DAYS_ELAPSED, DAYS_REMAINING, WD, year_today=None, year_mtd=None):
+               DAYS_ELAPSED, DAYS_REMAINING, WD, year_today=None, year_mtd=None,
+               parts=None):
     NAVY = colors.HexColor('#24214a'); ORANGE = colors.HexColor('#eb941f')
     BLUE = colors.HexColor('#00579e'); WHITE = colors.white
     LIGHT = colors.HexColor('#F2F3F7'); GREY = colors.HexColor('#666666')
@@ -352,7 +431,7 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
                 ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
 
     # Page 1
-    chrome(1, 3); y = YT
+    chrome(1, 4); y = YT
     sec_lbl(y, "TODAY'S SPEND"); y -= LH + G
     draw_cards(y, CARD_H, [("Today's Total", fmt(daily_total), BLUE, ''),
         ('Damage', fmt(daily_damage), RED, ''), ('Tyres', fmt(daily_tyres), NAVY, ''),
@@ -400,7 +479,7 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     btbl.setStyle(TableStyle(bgt_sty)); btbl.wrapOn(cv, W, H); btbl.drawOn(cv, M, y - BGT_H)
 
     # Page 2 — Month-to-Date + Spend by Registration Year
-    cv.showPage(); chrome(2, 3); y = YT
+    cv.showPage(); chrome(2, 4); y = YT
     sec_lbl(y, f'Month-to-Date — {mo_name} {REPORT_DATE.split()[-1]}'); y -= LH + G
     draw_cards(y, CARD_H, [('MTD Total', fmt(mtd_total), BLUE, f'{DAYS_ELAPSED} of {WD} working days'),
         ('MTD Damage', fmt(mtd_damage), RED, ''), ('MTD Tyres', fmt(mtd_tyres), NAVY, '')], 3)
@@ -429,8 +508,44 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     yr_tbl.setStyle(TableStyle(yr_sty)); yr_tbl.wrapOn(cv, W, H)
     yr_tbl.drawOn(cv, M, y - n_yr * RH_B)
 
-    # Page 3 — Day-by-Day Summary
-    cv.showPage(); chrome(3, 3); y = YT
+    # Page 3 — Parts Category Breakdown (2025 & newer trucks)
+    cv.showPage(); chrome(3, 4); y = YT
+    sec_lbl(y, 'Parts Category Breakdown — 2025 & Newer Trucks'); y -= LH + G
+    p = parts or {'ltd': {2025: {}, 2026: {}}, 'mtd': {2025: {}, 2026: {}},
+                  'total_ltd': {2025: 0, 2026: 0}, 'total_mtd': {2025: 0, 2026: 0},
+                  'trucks_ltd': {2025: 0, 2026: 0}, 'trucks_mtd': {2025: 0, 2026: 0}}
+    cv.setFillColor(GREY); cv.setFont('Helvetica', 8.5)
+    cv.drawString(M, y, 'Life-to-date spend on 2025/2026-plate vehicles — all divisions, '
+                        'including capital fit-out.')
+    y -= 5 * mm
+    cv.drawString(M, y, f"This month so far: 25-plate {fmt(p['total_mtd'][2025])}  "
+                        f"| 26-plate {fmt(p['total_mtd'][2026])}")
+    y -= NOTE_H + G
+
+    d25 = p['ltd'][2025]; d26 = p['ltd'][2026]
+    pc_data = [['Category', '2025 plate', '2026 plate', 'Total']]
+    for cat in CATEGORIES:
+        v25 = d25.get(cat, 0.0); v26 = d26.get(cat, 0.0)
+        if not v25 and not v26:
+            continue
+        pc_data.append([cat, fmt(v25), fmt(v26), fmt(v25 + v26)])
+    t25 = p['total_ltd'][2025]; t26 = p['total_ltd'][2026]
+    pc_data.append(['TOTAL', fmt(t25), fmt(t26), fmt(t25 + t26)])
+    n_pc = len(pc_data)
+    pc_sty = base_tbl() + [('BACKGROUND', (0, n_pc - 1), (-1, n_pc - 1), colors.HexColor('#E0E3EE')),
+                           ('FONTNAME', (0, n_pc - 1), (-1, n_pc - 1), 'Helvetica-Bold'),
+                           ('LINEABOVE', (0, n_pc - 1), (-1, n_pc - 1), 0.5, NAVY),
+                           ('TOPPADDING', (0, 0), (-1, -1), 2.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5)]
+    pc_tbl = Table(pc_data, colWidths=[66 * mm, 40 * mm, 40 * mm, 40 * mm], rowHeights=RH_B)
+    pc_tbl.setStyle(TableStyle(pc_sty)); pc_tbl.wrapOn(cv, W, H)
+    pc_tbl.drawOn(cv, M, y - n_pc * RH_B)
+    y -= n_pc * RH_B + G + 4 * mm
+    cv.setFillColor(GREY); cv.setFont('Helvetica-Oblique', 8)
+    cv.drawString(M, y, f"Based on {p['trucks_ltd'][2025]} × 2025-plate and "
+                        f"{p['trucks_ltd'][2026]} × 2026-plate trucks on fleet.")
+
+    # Page 4 — Day-by-Day Summary
+    cv.showPage(); chrome(4, 4); y = YT
     sec_lbl(y, 'Day-by-Day Summary'); y -= LH + G
     dcols = [28 * mm, 40 * mm, 32 * mm, 32 * mm, 32 * mm, 22 * mm]
     ddata = [['Date', 'Total Spend', 'Damage', 'Tyres', 'Capital', 'Daily Avg']]

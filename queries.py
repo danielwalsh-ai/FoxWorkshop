@@ -124,6 +124,56 @@ def reg_year_split(report_date):
     return dict(today), dict(mtd)
 
 
+def parts_category_split(report_date):
+    """Parts-category breakdown for the 2025 & 2026-plate trucks.
+
+    Answers Paul's ask: "categorise the spend on the trucks into part
+    categories, interested in the 25 plate spend."  Unlike reg_year_split this
+    is ALL divisions (incl. Capital) — the biggest chunk of new-truck fit-out
+    (safety/camera/radar systems, livery) is booked to Capital, so restricting
+    to the workshop top-sheets would hide exactly what he wants to see.
+
+    Returns a dict:
+      ltd / mtd  -> {2025: {category: £}, 2026: {category: £}}
+      total_ltd / total_mtd -> {2025: £, 2026: £}
+      trucks_ltd / trucks_mtd -> {2025: n, 2026: n}
+    """
+    from collections import defaultdict
+    from classify import reg_year
+    from parts_category import categorise
+    first, _ = _bounds(report_date.year, report_date.month)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""SELECT report_date, vehicle_reg, part_name, cost
+                       FROM transactions WHERE report_date <= %s""", (report_date,))
+        rows = cur.fetchall()
+    ltd = {2025: defaultdict(float), 2026: defaultdict(float)}
+    mtd = {2025: defaultdict(float), 2026: defaultdict(float)}
+    tr_ltd = {2025: set(), 2026: set()}
+    tr_mtd = {2025: set(), 2026: set()}
+    for rd, reg, part, cost in rows:
+        reg = (reg or '').strip()
+        if not reg:
+            continue
+        y = reg_year(reg)
+        if y not in (2025, 2026):
+            continue
+        cost = float(cost or 0)
+        cat = categorise(part)
+        ltd[y][cat] += cost
+        tr_ltd[y].add(reg)
+        if rd >= first:
+            mtd[y][cat] += cost
+            tr_mtd[y].add(reg)
+    return {
+        'ltd': {y: dict(ltd[y]) for y in (2025, 2026)},
+        'mtd': {y: dict(mtd[y]) for y in (2025, 2026)},
+        'total_ltd': {y: round(sum(ltd[y].values()), 2) for y in (2025, 2026)},
+        'total_mtd': {y: round(sum(mtd[y].values()), 2) for y in (2025, 2026)},
+        'trucks_ltd': {y: len(tr_ltd[y]) for y in (2025, 2026)},
+        'trucks_mtd': {y: len(tr_mtd[y]) for y in (2025, 2026)},
+    }
+
+
 def recent_transactions(y, m, limit=60):
     first, nxt = _bounds(y, m)
     with get_conn() as c, c.cursor() as cur:
