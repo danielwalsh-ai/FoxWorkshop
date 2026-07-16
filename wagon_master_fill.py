@@ -63,22 +63,25 @@ EARNINGS_SUM_GROUPS = [range(4, 20), [23], range(27, 73), range(76, 100), range(
 
 # ---- source extraction -----------------------------------------------------
 
-def read_daily_file(path):
-    """Return (report_date, {REG: value}, wagon_count) from the daily wagon file."""
+def read_daily_file(path, date_override=None, value_col=3):
+    """Return (report_date, {REG: value}, wagon_count) from the daily wagon file.
+
+    value_col/date_override let a weekend sheet (Sat in col C, Sun in col D,
+    date in Q2 not P2) be filled one day at a time."""
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb['Wagons']
-    report_date = ws['P2'].value
+    report_date = date_override or ws['P2'].value
     if isinstance(report_date, datetime):
         report_date = report_date.date()
     mapping, count = {}, None
     for r in range(3, ws.max_row + 1):
-        a, c = ws.cell(row=r, column=1).value, ws.cell(row=r, column=3).value
+        a, c = ws.cell(row=r, column=1).value, ws.cell(row=r, column=value_col).value
         if isinstance(a, str) and a.strip() == 'VEHICLE':
             break  # reached the TARGET table at the bottom - stop
         if isinstance(a, str) and a.strip():
             mapping[a.strip().upper()] = c
         elif isinstance(a, (int, float)) and ws.cell(row=r + 2, column=1).value is None \
-                and ws.cell(row=r, column=3).value is None:
+                and ws.cell(row=r, column=value_col).value is None:
             count = int(a)  # standalone grand-count row (A121 style)
     if count is None:  # fallback: cell two below last category subtotal
         for r in range(ws.max_row, 3, -1):
@@ -204,8 +207,8 @@ class SheetXmlEditor:
 
 # ---- main fill -------------------------------------------------------------
 
-def fill_master(master, daily, transactions, out):
-    report_date, earnings, wagon_count = read_daily_file(daily)
+def fill_master(master, daily, transactions, out, date_override=None, value_col=3):
+    report_date, earnings, wagon_count = read_daily_file(daily, date_override, value_col)
     parts = workshop = tyres = None
     if transactions:
         parts, workshop, tyres = read_transaction_report(transactions, report_date)
