@@ -215,6 +215,98 @@ def _write_fisher_nms_sheets(wb, fn, report_date_long):
             ws.column_dimensions[get_column_letter(cc)].width = 14
 
 
+def _style_workbook(wb, today_col, hook_hdr, hook_total_row):
+    """Fox-brand styling pass: navy headers, orange accents, borders, number
+    formats. Runs on every build so the workbook is client-ready untouched."""
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    NAVY = 'FF24214A'; ORANGE = 'FFEB941F'; LIGHT = 'FFF2F3F7'; TOTBG = 'FFE0E3EE'
+    navy_fill = PatternFill('solid', fgColor=NAVY)
+    orange_fill = PatternFill('solid', fgColor=ORANGE)
+    tot_fill = PatternFill('solid', fgColor=TOTBG)
+    white_bold = Font(bold=True, color='FFFFFFFF')
+    navy_bold = Font(bold=True, color='FF24214A')
+    thin = Side(style='thin', color='FFCCCCCC')
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    navy_top = Border(left=thin, right=thin, bottom=thin,
+                      top=Side(style='medium', color=NAVY))
+    money = '£#,##0.00'
+    MAXC = 33
+
+    cover = wb['Cover']
+    # header row 2: navy band with white day labels
+    cover.cell(2, 1, 'Division / Category')
+    for col in range(1, MAXC + 1):
+        cell = cover.cell(2, col)
+        cell.fill = navy_fill; cell.font = white_bold
+        cell.alignment = Alignment(horizontal='center')
+    cover.cell(2, MAXC, 'MTD')
+
+    def band(rows, fill=None, font=None, border=box, fmt=True):
+        for r in rows:
+            for col in range(1, MAXC + 1):
+                cell = cover.cell(r, col)
+                if fill: cell.fill = fill
+                if font and col == 1: cell.font = font
+                cell.border = border
+                if fmt and col > 1: cell.number_format = money
+
+    div_rows = list(range(3, 36, 2))
+    band(div_rows, font=navy_bold)
+    band([37], fill=tot_fill, font=navy_bold, border=navy_top)
+    for col in range(2, MAXC + 1):
+        cover.cell(37, col).font = navy_bold
+    band([SCANIA_ROW, VOLVO_ROW, CAPITAL_ROW], fill=orange_fill, font=navy_bold)
+    band([PRE24_ROW, R24_ROW, R25_ROW], fill=PatternFill('solid', fgColor='FFFBE5C7'),
+         font=navy_bold)
+    band(list(COVER_BOTTOM_ROW.values()))
+    band([BOT_TOTAL_ROW], fill=tot_fill, font=navy_bold, border=navy_top)
+    for col in range(2, MAXC + 1):
+        cover.cell(BOT_TOTAL_ROW, col).font = navy_bold
+
+    # registration-year block (71-79)
+    for col in range(1, MAXC + 1):
+        cell = cover.cell(71, col)
+        cell.fill = navy_fill; cell.font = white_bold
+    band(list(range(72, 79)))
+    band([79], fill=tot_fill, font=navy_bold, border=navy_top)
+    for col in range(2, MAXC + 1):
+        cover.cell(79, col).font = navy_bold
+
+    # hook fleet block
+    for col in range(1, MAXC + 1):
+        cell = cover.cell(hook_hdr, col)
+        cell.fill = navy_fill; cell.font = white_bold
+    band(list(range(hook_hdr + 1, hook_total_row)))
+    band([hook_total_row], fill=tot_fill, font=navy_bold, border=navy_top)
+    for col in range(2, MAXC + 1):
+        cover.cell(hook_total_row, col).font = navy_bold
+
+    cover.column_dimensions['A'].width = 32
+    for col in range(2, 33):
+        cover.column_dimensions[get_column_letter(col)].width = 10.5
+    cover.column_dimensions[get_column_letter(MAXC)].width = 12.5
+    cover.freeze_panes = 'B3'
+
+    # division tabs: navy header row + borders on used range
+    for tab in wb.sheetnames:
+        if tab in ('Cover', 'Parts (25 & newer)', 'J Fisher Breakdown', 'NMS Breakdown'):
+            continue
+        ws = wb[tab]
+        ncols = max(ws.max_column, 18)
+        for col in range(1, ncols + 1):
+            cell = ws.cell(1, col)
+            cell.fill = navy_fill; cell.font = white_bold
+        if ws.max_row > 1:
+            for r in range(2, ws.max_row + 1):
+                for col in range(1, ncols + 1):
+                    cell = ws.cell(r, col)
+                    cell.border = box
+                    if col == 6:
+                        cell.number_format = money
+        ws.freeze_panes = 'A2'
+
+
 def build(report_date: dt.date, fixed_wd=FIXED_WD):
     """Build the workbook + PDF for report_date, sourcing every figure for the
     whole month from the database — so month-to-date is always correct and no
@@ -417,6 +509,8 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     # ── J Fisher / NMS age-band x category breakdown tabs ──
     fn = queries.fisher_nms_split(report_date)
     _write_fisher_nms_sheets(wb, fn, report_date_long)
+
+    _style_workbook(wb, today_col, HOOK_HDR, HOOK_TOTAL_ROW)
 
     wb.save(out_xlsx)
 
