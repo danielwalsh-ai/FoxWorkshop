@@ -202,6 +202,19 @@ class SheetXmlEditor:
         if dim is not None:
             dim.set('ref', re.sub(r':[A-Z]+(\d+)$', rf':{colletter}\1', dim.get('ref')))
 
+    def mirror_format(self, src_letter, tgt_letter):
+        """Give the target column the source column's cell styles on any row the
+        fill left empty — so a newly-extended column keeps the sheet's borders."""
+        for rownum, rowel in list(self.rowmap.items()):
+            src = self._cell(rowel, f'{src_letter}{rownum}')
+            if src is None:
+                continue
+            s = src.get('s')
+            if s is None:
+                continue
+            if self._cell(rowel, f'{tgt_letter}{rownum}') is None:
+                self.write(rownum, tgt_letter, style=s)   # empty, styled (borders)
+
     def tobytes(self):
         return etree.tostring(self.tree, xml_declaration=True, encoding='UTF-8', standalone=True)
 
@@ -275,6 +288,7 @@ def fill_master(master, daily, transactions, out, date_override=None, value_col=
         ed.write(ROW_PARTS, TL, value=round(parts, 2), style=ed.style_of(ROW_PARTS, src_col_letter))
         ed.write(ROW_WORKSHOP, TL, value=round(workshop, 2), style=ed.style_of(ROW_WORKSHOP, src_col_letter))
         ed.write(ROW_TYRES, TL, value=round(tyres, 2), style=ed.style_of(ROW_TYRES, src_col_letter))
+    ed.mirror_format(src_col_letter, TL)   # borders on any rows the fill left empty
     ed.fix_dimension(TL)
 
     # repackage preserving everything else; force recalc on open, drop calcChain
