@@ -37,8 +37,9 @@ def tidy(src, out=None, width=13):
     def _has_borders(col, row):
         b = ws.cell(row, col).border
         return all([b.left.style, b.right.style, b.top.style, b.bottom.style])
-    # golden = first visible date column fully bordered on the tell-tale rows
-    golden = next((c for c in vis if all(_has_borders(c, r) for r in CHECK_ROWS)), vis[0])
+    # golden = the most fully-bordered visible date column (a complete weekday),
+    # so no row's border is missed when a blank weekend column is normalised.
+    golden = max(vis, key=lambda c: sum(_has_borders(c, r) for r in range(1, 206)))
 
     z = zipfile.ZipFile(src)
     wbxml = z.read('xl/workbook.xml').decode()
