@@ -278,6 +278,13 @@ def _style_workbook(wb, today_col, hook_hdr, hook_total_row):
         cell = cover.cell(hook_hdr, col)
         cell.fill = navy_fill; cell.font = white_bold
     band(list(range(hook_hdr + 1, hook_total_row)))
+    # orange highlight on any hook cell with spend (day columns + MTD)
+    for r in range(hook_hdr + 1, hook_total_row):
+        for col in range(2, MAXC + 1):
+            v = cover.cell(r, col).value
+            if isinstance(v, (int, float)) and v > 0:
+                cover.cell(r, col).fill = orange_fill
+                cover.cell(r, col).font = navy_bold
     band([hook_total_row], fill=tot_fill, font=navy_bold, border=navy_top)
     for col in range(2, MAXC + 1):
         cover.cell(hook_total_row, col).font = navy_bold
@@ -446,6 +453,8 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         return col_for(d)
     for reg in hook_regs:
         cover.cell(hr, 1, f"{reg[:4]} {reg[4:]}")
+        for cc in range(2, today_col + 1):          # zero-fill every elapsed day
+            cover.cell(hr, cc, 0)
         days = per_reg.get(reg, {})
         for d, amt in days.items():
             cc = _daycell(d)
@@ -456,6 +465,8 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         hr += 1
     UNM_ROW = hr
     cover.cell(UNM_ROW, 1, 'Hook lines with no registration')
+    for cc in range(2, today_col + 1):
+        cover.cell(UNM_ROW, cc, 0)
     for d, amt in unmatched.items():
         cover.cell(UNM_ROW, _daycell(d), round(amt, 2))
     cover.cell(UNM_ROW, MTD_COL, round(sum(unmatched.values()), 2))
