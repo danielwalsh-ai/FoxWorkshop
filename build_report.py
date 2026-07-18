@@ -141,6 +141,80 @@ def _write_parts_sheet(wb, parts, report_date_long):
         ws.column_dimensions[col].width = 15
 
 
+def _write_fisher_nms_sheets(wb, fn, report_date_long):
+    """Two tabs — 'J Fisher Breakdown' and 'NMS Breakdown' — age band x parts
+    category, month-to-date and today, in the Parts (25 & newer) visual style."""
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from queries import FN_BANDS
+    NAVY = 'FF24214A'; LIGHT = 'FFF2F3F7'
+    hdr_font = Font(bold=True, color='FFFFFFFF', size=10)
+    hdr_fill = PatternFill('solid', fgColor=NAVY)
+    title_font = Font(bold=True, color='FF24214A', size=13)
+    note_font = Font(italic=True, color='FF666666', size=9)
+    bold = Font(bold=True, color='FF24214A')
+    money = '£#,##0.00'
+    thin = Side(style='thin', color='FFCCCCCC')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    titles = {'J FISHER': ('J Fisher Breakdown', 'J Fisher (Trucks + Plant) — Age x Category'),
+              'NMS': ('NMS Breakdown', 'NMS (Civil + Plant) — Age x Category')}
+
+    def matrix_section(ws, start_row, mat, heading):
+        r = start_row
+        ws.cell(r, 1, heading).font = bold
+        r += 1
+        headers = ['Category'] + FN_BANDS + ['Total']
+        for ci, h in enumerate(headers, 1):
+            cell = ws.cell(r, ci, h)
+            cell.font = hdr_font; cell.fill = hdr_fill; cell.border = border
+            cell.alignment = Alignment(horizontal='left' if ci == 1 else 'right')
+        r += 1
+        col_tot = {b: 0.0 for b in FN_BANDS}
+        rowi = 0
+        for cat in CATEGORIES:
+            bands = mat.get(cat, {})
+            if not any(bands.get(b, 0) for b in FN_BANDS):
+                continue
+            fill = PatternFill('solid', fgColor=LIGHT) if rowi % 2 == 0 else None
+            rowvals = [round(bands.get(b, 0.0), 2) for b in FN_BANDS]
+            for b, v in zip(FN_BANDS, rowvals):
+                col_tot[b] += v
+            vals = [cat] + rowvals + [round(sum(rowvals), 2)]
+            for ci, v in enumerate(vals, 1):
+                cell = ws.cell(r, ci, v)
+                cell.border = border
+                if ci > 1:
+                    cell.number_format = money
+                if fill:
+                    cell.fill = fill
+            r += 1; rowi += 1
+        tot_vals = ['TOTAL'] + [round(col_tot[b], 2) for b in FN_BANDS] + \
+                   [round(sum(col_tot.values()), 2)]
+        for ci, v in enumerate(tot_vals, 1):
+            cell = ws.cell(r, ci, v)
+            cell.font = bold; cell.border = border
+            cell.fill = PatternFill('solid', fgColor='FFE0E3EE')
+            if ci > 1:
+                cell.number_format = money
+        return r + 3
+
+    for g, (tab, title) in titles.items():
+        if tab in wb.sheetnames:
+            del wb[tab]
+        ws = wb.create_sheet(tab)
+        ws['A1'] = title
+        ws['A1'].font = title_font
+        ws['A2'] = ("Registered vehicles banded by plate year; plant kit and stock "
+                    f"lines have no VRM and sit under 'Unregistered / Plant'.  As at {report_date_long}.")
+        ws['A2'].font = note_font
+        nxt = matrix_section(ws, 4, fn[g]['mtd'], f"This month so far  (£{fn[g]['mtd_total']:,.2f})")
+        matrix_section(ws, nxt, fn[g]['today'], f"Today  (£{fn[g]['today_total']:,.2f})")
+        ws.column_dimensions['A'].width = 30
+        from openpyxl.utils import get_column_letter
+        for cc in range(2, len(FN_BANDS) + 3):
+            ws.column_dimensions[get_column_letter(cc)].width = 14
+
+
 def build(report_date: dt.date, fixed_wd=FIXED_WD):
     """Build the workbook + PDF for report_date, sourcing every figure for the
     whole month from the database — so month-to-date is always correct and no
@@ -269,6 +343,43 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         cover.cell(YEAR_TOTAL_ROW, col, round(sum(gcv(r, col) for r in all_year_rows), 2))
     cover.cell(YEAR_TOTAL_ROW, MTD_COL, get_mtd(YEAR_TOTAL_ROW))
 
+    # ── Hook Fleet — spend by registration (PF request; rows 81+) ──
+    HOOK_HDR = 81
+    fleet, per_reg, unmatched = queries.hook_split(report_date)
+    extras = [r for r in sorted(per_reg) if r not in fleet]
+    hook_regs = fleet + extras
+    cover.cell(HOOK_HDR, 1, 'HOOK FLEET — SPEND BY REGISTRATION')
+    hr = HOOK_HDR + 1
+    def _daycell(d):
+        return col_for(d)
+    for reg in hook_regs:
+        cover.cell(hr, 1, f"{reg[:4]} {reg[4:]}")
+        days = per_reg.get(reg, {})
+        for d, amt in days.items():
+            cc = _daycell(d)
+            prev = cover.cell(hr, cc).value
+            prev = float(prev) if isinstance(prev, (int, float)) else 0.0
+            cover.cell(hr, cc, round(prev + amt, 2))
+        cover.cell(hr, MTD_COL, round(sum(days.values()), 2))
+        hr += 1
+    UNM_ROW = hr
+    cover.cell(UNM_ROW, 1, 'Hook lines with no registration')
+    for d, amt in unmatched.items():
+        cover.cell(UNM_ROW, _daycell(d), round(amt, 2))
+    cover.cell(UNM_ROW, MTD_COL, round(sum(unmatched.values()), 2))
+    HOOK_TOTAL_ROW = UNM_ROW + 1
+    cover.cell(HOOK_TOTAL_ROW, 1, 'Hooks Total')
+    for col in range(2, today_col + 1):
+        tot = 0.0
+        for r in range(HOOK_HDR + 1, HOOK_TOTAL_ROW):
+            v = cover.cell(r, col).value
+            if isinstance(v, (int, float)):
+                tot += float(v)
+        cover.cell(HOOK_TOTAL_ROW, col, round(tot, 2))
+    cover.cell(HOOK_TOTAL_ROW, MTD_COL,
+               round(sum(float(cover.cell(r, MTD_COL).value or 0)
+                         for r in range(HOOK_HDR + 1, HOOK_TOTAL_ROW)), 2))
+
     # write the day's transactions into the division tabs
     tabmap = {s.strip(): s for s in wb.sheetnames}
     nextrow = {}
@@ -303,6 +414,10 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     parts = queries.parts_category_split(report_date)
     _write_parts_sheet(wb, parts, report_date_long)
 
+    # ── J Fisher / NMS age-band x category breakdown tabs ──
+    fn = queries.fisher_nms_split(report_date)
+    _write_fisher_nms_sheets(wb, fn, report_date_long)
+
     wb.save(out_xlsx)
 
     # ── verify balance + PDF ──
@@ -325,8 +440,10 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
           f"{'BALANCED' if diff < 0.01 else f'GAP £{diff:,.2f}'}")
 
     year_today, year_mtd = queries.reg_year_split(report_date)
+    hook_pdf = (hook_regs, per_reg, unmatched)
     _build_pdf(out_pdf, cover2, g2, report_date, report_date_long,
-               today_col, days_elapsed, days_remaining, wd, year_today, year_mtd, parts)
+               today_col, days_elapsed, days_remaining, wd, year_today, year_mtd, parts,
+               fn=fn, hooks=hook_pdf)
     print(f"Saved: {out_xlsx.name}")
     print(f"Saved: {out_pdf.name}")
     return out_xlsx, out_pdf, diff, top, report_date_long
@@ -335,7 +452,7 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
 # ── PDF (ported from original, budgets read from sheet) ─────────────
 def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
                DAYS_ELAPSED, DAYS_REMAINING, WD, year_today=None, year_mtd=None,
-               parts=None):
+               parts=None, fn=None, hooks=None):
     NAVY = colors.HexColor('#24214a'); ORANGE = colors.HexColor('#eb941f')
     BLUE = colors.HexColor('#00579e'); WHITE = colors.white
     LIGHT = colors.HexColor('#F2F3F7'); GREY = colors.HexColor('#666666')
@@ -431,7 +548,7 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
                 ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
 
     # Page 1
-    chrome(1, 4); y = YT
+    chrome(1, 7); y = YT
     sec_lbl(y, "TODAY'S SPEND"); y -= LH + G
     draw_cards(y, CARD_H, [("Today's Total", fmt(daily_total), BLUE, ''),
         ('Damage', fmt(daily_damage), RED, ''), ('Tyres', fmt(daily_tyres), NAVY, ''),
@@ -479,7 +596,7 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     btbl.setStyle(TableStyle(bgt_sty)); btbl.wrapOn(cv, W, H); btbl.drawOn(cv, M, y - BGT_H)
 
     # Page 2 — Month-to-Date + Spend by Registration Year
-    cv.showPage(); chrome(2, 4); y = YT
+    cv.showPage(); chrome(2, 7); y = YT
     sec_lbl(y, f'Month-to-Date — {mo_name} {REPORT_DATE.split()[-1]}'); y -= LH + G
     draw_cards(y, CARD_H, [('MTD Total', fmt(mtd_total), BLUE, f'{DAYS_ELAPSED} of {WD} working days'),
         ('MTD Damage', fmt(mtd_damage), RED, ''), ('MTD Tyres', fmt(mtd_tyres), NAVY, '')], 3)
@@ -509,7 +626,7 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     yr_tbl.drawOn(cv, M, y - n_yr * RH_B)
 
     # Page 3 — Parts Category Breakdown (2025 & newer trucks)
-    cv.showPage(); chrome(3, 4); y = YT
+    cv.showPage(); chrome(3, 7); y = YT
     sec_lbl(y, 'Parts Category Breakdown — 2025 & Newer Trucks'); y -= LH + G
     p = parts or {'ltd': {2025: {}, 2026: {}}, 'mtd': {2025: {}, 2026: {}},
                   'total_ltd': {2025: 0, 2026: 0}, 'total_mtd': {2025: 0, 2026: 0},
@@ -544,8 +661,77 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     cv.drawString(M, y, f"Based on {p['trucks_ltd'][2025]} × 2025-plate and "
                         f"{p['trucks_ltd'][2026]} × 2026-plate trucks on fleet.")
 
-    # Page 4 — Day-by-Day Summary
-    cv.showPage(); chrome(4, 4); y = YT
+    # Pages 4-5 — J Fisher / NMS Age x Category (PF request 16/07)
+    from queries import FN_BANDS
+    fn = fn or {}
+    fn_titles = [('J FISHER', 'J Fisher (Trucks + Plant) — Age Band x Parts Category'),
+                 ('NMS', 'NMS (Civil + Plant) — Age Band x Parts Category')]
+    band_short = ['2021', '2022', '2023', '2024', '2025', '2026', 'Older', 'Unreg/Plant']
+    for pi, (g, title) in enumerate(fn_titles):
+        cv.showPage(); chrome(4 + pi, 7); y = YT
+        sec_lbl(y, title); y -= LH + G
+        gdat = fn.get(g, {'mtd': {}, 'today': {}, 'mtd_total': 0, 'today_total': 0})
+        cv.setFillColor(GREY); cv.setFont('Helvetica', 8.5)
+        cv.drawString(M, y, "Registered vehicles banded by plate year. Plant kit and stock lines "
+                            "carry no VRM and sit under Unreg/Plant.")
+        y -= 5 * mm
+        cv.drawString(M, y, f"Month to date: {fmt(gdat['mtd_total'])}   |   Today: {fmt(gdat['today_total'])}")
+        y -= NOTE_H + G
+        mat = gdat['mtd']
+        fnd = [['Category'] + band_short + ['Total']]
+        col_tot = {b: 0.0 for b in FN_BANDS}
+        for cat in CATEGORIES:
+            bands = mat.get(cat, {})
+            if not any(bands.get(b, 0) for b in FN_BANDS):
+                continue
+            vals = [round(bands.get(b, 0.0), 2) for b in FN_BANDS]
+            for b, v in zip(FN_BANDS, vals):
+                col_tot[b] += v
+            fnd.append([cat] + [fmt(v) if v else '—' for v in vals] + [fmt(sum(vals))])
+        n_fn = len(fnd)
+        fnd.append(['TOTAL'] + [fmt(round(col_tot[b], 2)) for b in FN_BANDS] +
+                   [fmt(round(sum(col_tot.values()), 2))])
+        fn_sty = base_tbl() + [('FONTSIZE', (0, 0), (-1, -1), 6.8),
+                               ('BACKGROUND', (0, n_fn), (-1, n_fn), colors.HexColor('#E0E3EE')),
+                               ('FONTNAME', (0, n_fn), (-1, n_fn), 'Helvetica-Bold'),
+                               ('LINEABOVE', (0, n_fn), (-1, n_fn), 0.5, NAVY)]
+        fn_cols = [50 * mm] + [15 * mm] * 8 + [16 * mm]
+        fn_tbl = Table(fnd, colWidths=fn_cols, rowHeights=RH_B)
+        fn_tbl.setStyle(TableStyle(fn_sty)); fn_tbl.wrapOn(cv, W, H)
+        fn_tbl.drawOn(cv, M, y - len(fnd) * RH_B)
+
+    # Page 6 — Hook Fleet spend by registration
+    cv.showPage(); chrome(6, 7); y = YT
+    sec_lbl(y, 'Hook Fleet — Spend by Registration'); y -= LH + G
+    hook_regs, per_reg, unmatched = hooks if hooks else ([], {}, {})
+    cv.setFillColor(GREY); cv.setFont('Helvetica', 8.5)
+    cv.drawString(M, y, 'Every hook wagon on fleet — spend today and month-to-date. '
+                        'Reconciles with the HOOKS area row on the cover sheet.')
+    y -= NOTE_H + G
+    hk_data = [['Registration', "Today", 'Month-to-Date']]
+    tot_t = tot_m = 0.0
+    for reg in hook_regs:
+        days = per_reg.get(reg, {})
+        t = round(days.get(report_date, 0.0), 2)
+        mtd_v = round(sum(days.values()), 2)
+        tot_t += t; tot_m += mtd_v
+        hk_data.append([f"{reg[:4]} {reg[4:]}", fmt(t) if t else '—', fmt(mtd_v) if mtd_v else '—'])
+    if unmatched:
+        ut = round(unmatched.get(report_date, 0.0), 2)
+        um = round(sum(unmatched.values()), 2)
+        tot_t += ut; tot_m += um
+        hk_data.append(['No registration on line', fmt(ut) if ut else '—', fmt(um)])
+    n_hk = len(hk_data)
+    hk_data.append(['HOOKS TOTAL', fmt(round(tot_t, 2)), fmt(round(tot_m, 2))])
+    hk_sty = base_tbl() + [('BACKGROUND', (0, n_hk), (-1, n_hk), colors.HexColor('#E0E3EE')),
+                           ('FONTNAME', (0, n_hk), (-1, n_hk), 'Helvetica-Bold'),
+                           ('LINEABOVE', (0, n_hk), (-1, n_hk), 0.5, NAVY)]
+    hk_tbl = Table(hk_data, colWidths=[70 * mm, 58 * mm, 58 * mm], rowHeights=RH)
+    hk_tbl.setStyle(TableStyle(hk_sty)); hk_tbl.wrapOn(cv, W, H)
+    hk_tbl.drawOn(cv, M, y - len(hk_data) * RH)
+
+    # Page 7 — Day-by-Day Summary
+    cv.showPage(); chrome(7, 7); y = YT
     sec_lbl(y, 'Day-by-Day Summary'); y -= LH + G
     dcols = [28 * mm, 40 * mm, 32 * mm, 32 * mm, 32 * mm, 22 * mm]
     ddata = [['Date', 'Total Spend', 'Damage', 'Tyres', 'Capital', 'Daily Avg']]
