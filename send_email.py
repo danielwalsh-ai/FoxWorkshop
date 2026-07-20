@@ -46,7 +46,10 @@ def send_report(pdf_path, xlsx_path, report_date_long, headline=""):
     # Correct it wherever it appears, regardless of env config (DW 18/07/2026).
     DEAD = "danielwalsh@kfltd.uk"
     GOOD = "daniel.walsh@kfltd.uk"
-    if sender.strip().lower() == DEAD:
+    # EMAIL_FROM may be formatted as 'Name <address>' — replace anywhere it appears
+    import re as _re
+    sender = _re.sub(_re.escape(DEAD), GOOD, sender, flags=_re.IGNORECASE)
+    if not sender.strip():
         sender = GOOD
     recipients = [e.strip() for e in env.get("EMAIL_TO", "").split(",") if e.strip()]
     recipients = [GOOD if r.lower() == DEAD else r for r in recipients]
