@@ -42,7 +42,17 @@ def send_report(pdf_path, xlsx_path, report_date_long, headline=""):
     env = load_env()
     api_key = env.get("RESEND_API_KEY", "")
     sender = env.get("EMAIL_FROM", "")
+    # danielwalsh@kfltd.uk (no dot) is not a real mailbox — replies bounce.
+    # Correct it wherever it appears, regardless of env config (DW 18/07/2026).
+    DEAD = "danielwalsh@kfltd.uk"
+    GOOD = "daniel.walsh@kfltd.uk"
+    if sender.strip().lower() == DEAD:
+        sender = GOOD
     recipients = [e.strip() for e in env.get("EMAIL_TO", "").split(",") if e.strip()]
+    recipients = [GOOD if r.lower() == DEAD else r for r in recipients]
+    seen = set()
+    recipients = [r for r in recipients if not (r.lower() in seen or seen.add(r.lower()))]
+    reply_to = env.get("EMAIL_REPLY_TO", GOOD)
     if not api_key:
         raise RuntimeError("RESEND_API_KEY is empty in .env")
     if not recipients:
@@ -63,6 +73,7 @@ def send_report(pdf_path, xlsx_path, report_date_long, headline=""):
 
     payload = {
         "from": sender,
+        "reply_to": reply_to,
         "to": recipients,
         "subject": subject,
         "html": html,
