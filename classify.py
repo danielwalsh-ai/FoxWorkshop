@@ -143,6 +143,9 @@ def classify(row):
         if sup_u in TYRE_S or 'TYRE' in part_u:
             return 'Tyres'
         return 'NMS CIVIL'
+    # Hyundai / loading-shovel kit outside J Fisher (e.g. Leyland) -> general Plant tab
+    if any(k in ref_u for k in ['HYUNDAI', 'HYUNADAI', 'LOADING SHOVEL', 'SHOVEL']):
+        return 'Plant'
     if sup_u in TYRE_S or 'TYRE' in part_u:
         return 'Tyres'
     if asgn in DM:
