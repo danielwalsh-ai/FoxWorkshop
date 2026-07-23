@@ -70,7 +70,7 @@ def send_report(pdf_path, xlsx_path, report_date_long, headline=""):
       {body_line}
       <p>The full KPI report (PDF) and transaction workbook (Excel) are attached.</p>
       <hr style="border:none;border-top:1px solid #ccc">
-      <p style="font-size:12px;color:#888">Prepared automatically by Knowles Farm Ltd.</p>
+      <p style="font-size:12px;color:#888">Prepared automatically by danielwalsh.ai</p>
     </div>
     """
 
