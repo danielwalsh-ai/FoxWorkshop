@@ -619,11 +619,11 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
         cv.setFillColor(WHITE); cv.setFont('Helvetica-Bold', 16)
         cv.drawString(M, H - 10 * mm, 'Fox Group Ltd — Daily Workshop Spend Report')
         cv.setFont('Helvetica', 9)
-        cv.drawString(M, H - 17.5 * mm, f'{REPORT_DATE}   |   Prepared by Knowles Farm Ltd')
+        cv.drawString(M, H - 17.5 * mm, f'{REPORT_DATE}   |   Prepared by danielwalsh.ai')
         cv.drawRightString(W - M, H - 17.5 * mm, f'Page {pg} of {total}')
         cv.setFillColor(NAVY); cv.rect(0, 0, W, FH, fill=1, stroke=0)
         cv.setFillColor(WHITE); cv.setFont('Helvetica', 7.5)
-        cv.drawString(M, 4 * mm, 'Confidential — Fox Group Ltd   |   Prepared by Knowles Farm Ltd')
+        cv.drawString(M, 4 * mm, 'Confidential — Fox Group Ltd   |   Prepared by danielwalsh.ai')
         cv.drawRightString(W - M, 4 * mm, f'Generated {REPORT_DATE}')
 
     def sec_lbl(y, text):
