@@ -202,6 +202,31 @@ def fetch_master_from_gmail(tmpdir, since_days=30):
     return None, None, None
 
 
+def ensure_master(tmpdir, state):
+    """Make sure there's a master to work from, rebuilding from Gmail if not.
+
+    The container has no persistent volume, so a redeploy wipes state/. That's fine:
+    every run emails the master to Paul, so Gmail already holds the latest copy.
+    Recover it, and treat everything Katie sent before that email as already done —
+    which reconstructs exactly the state the wipe destroyed."""
+    if MASTER_FILE.exists():
+        return True
+    found, subj, when = fetch_master_from_gmail(tmpdir)
+    if not found:
+        return False
+    STATE_DIR.mkdir(exist_ok=True)
+    shutil.copy(found, MASTER_FILE)
+    state["watermark"] = when.isoformat()
+    # Persist immediately. If this run finds nothing new it returns early, and a later
+    # run would otherwise see the master present, skip recovery, and — with no
+    # watermark saved — reprocess every email Katie has sent.
+    save_state(state)
+    print(f"No stored master — recovered {found.name} from Gmail "
+          f"(sent {when:%Y-%m-%d %H:%M}).")
+    print("  Katie's earlier emails treated as already done.")
+    return True
+
+
 def transaction_report_for(date, tmpdir, _cache={}):
     """Prefer a locally-built report that covers the day; otherwise fetch from Gmail."""
     if date in _cache:
@@ -567,12 +592,12 @@ def alert_daniel(problems, results, dry_run=False):
 
 # ── main ────────────────────────────────────────────────────────────
 def run(dry_run=False, since_days=21, out_dir=None):
-    if not MASTER_FILE.exists():
-        print(f"No stored master. Seed it first:\n"
-              f'  python wagon_auto.py --seed "<path to current master>"')
-        return 2
     state = load_state()
     with tempfile.TemporaryDirectory() as tmp:
+        if not ensure_master(tmp, state):
+            print("No stored master and none found in Gmail. Seed it first:\n"
+                  '  python wagon_auto.py --seed "<path to current master>"')
+            return 2
         # Costs first: days filled before that evening's workshop report catch up here.
         master_in = MASTER_FILE
         topped, topped_days = topup_costs(MASTER_FILE, tmp)
@@ -585,7 +610,11 @@ def run(dry_run=False, since_days=21, out_dir=None):
                 master_in = MASTER_FILE
 
         msgs = fetch_katie_emails(tmp, since_days)
-        new = [m for m in msgs if m["id"] not in state["processed_message_ids"]]
+        mark = state.get("watermark")
+        mark = dt.datetime.fromisoformat(mark) if mark else None
+        new = [m for m in msgs
+               if m["id"] not in state["processed_message_ids"]
+               and (mark is None or m["date"] > mark)]
         if not new:
             print("Nothing new from Katie.")
             return 0
@@ -683,6 +712,7 @@ def main():
         with tempfile.TemporaryDirectory() as tmp:
             seen = fetch_katie_emails(tmp, a.since_days)
         st["processed_message_ids"] = [m["id"] for m in seen]
+        st.pop("watermark", None)      # this master IS current; no recovery point needed
         save_state(st)
         print(f"Seeded master from {a.seed} -> {MASTER_FILE}")
         print(f"Marked {len(seen)} existing email(s) from Katie as already done.")
