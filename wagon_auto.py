@@ -176,6 +176,32 @@ def fetch_transaction_report(tmpdir, target):
     return None
 
 
+def fetch_master_from_gmail(tmpdir, since_days=30):
+    """Newest 'Daily wagon earnings *.xlsx' attachment in the mailbox.
+
+    Saves hauling a 1.6MB workbook onto the server by hand — email it to yourself
+    (or let a previous run's email to Paul serve) and seed straight from Gmail."""
+    M = imaplib.IMAP4_SSL("imap.gmail.com")
+    M.login(ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"])
+    M.select('"[Gmail]/All Mail"')
+    since = (dt.date.today() - dt.timedelta(days=since_days)).strftime("%Y/%m/%d")
+    typ, data = M.search(None, "X-GM-RAW",
+                         f'"has:attachment filename:xlsx after:{since}"')
+    uids = data[0].split()
+    for uid in reversed(uids):                       # newest first
+        typ, md = M.fetch(uid, "(RFC822)")
+        msg = email.message_from_bytes(md[0][1])
+        box = Path(tmpdir) / f"seed_{uid.decode()}"
+        box.mkdir(parents=True, exist_ok=True)
+        for f in _attachments(msg, box):
+            if f.name.lower().startswith("daily wagon earnings"):
+                M.logout()
+                return f, msg.get("Subject", ""), email.utils.parsedate_to_datetime(
+                    msg.get("Date"))
+    M.logout()
+    return None, None, None
+
+
 def transaction_report_for(date, tmpdir, _cache={}):
     """Prefer a locally-built report that covers the day; otherwise fetch from Gmail."""
     if date in _cache:
@@ -628,6 +654,8 @@ def run(dry_run=False, since_days=21, out_dir=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--seed", metavar="XLSX", help="store this file as the starting master")
+    ap.add_argument("--seed-from-gmail", action="store_true",
+                    help="seed from the newest 'Daily wagon earnings' attachment in Gmail")
     ap.add_argument("--once", action="store_true", help="run now")
     ap.add_argument("--scheduled", action="store_true", help="run from cron")
     ap.add_argument("--dry-run", action="store_true", help="build but send nothing")
@@ -635,9 +663,20 @@ def main():
     ap.add_argument("--out-dir", help="also drop the finished master here")
     a = ap.parse_args()
 
-    if a.seed:
+    if a.seed or a.seed_from_gmail:
         STATE_DIR.mkdir(exist_ok=True)
-        shutil.copy(a.seed, MASTER_FILE)
+        if a.seed_from_gmail:
+            with tempfile.TemporaryDirectory() as tmp:
+                found, subj, when = fetch_master_from_gmail(tmp)
+                if not found:
+                    print("No 'Daily wagon earnings *.xlsx' attachment found in Gmail.\n"
+                          "Email the current master to yourself, then run this again.")
+                    return 1
+                print(f"Found {found.name}\n  from: {subj}\n  sent: {when:%Y-%m-%d %H:%M}")
+                shutil.copy(found, MASTER_FILE)
+                a.seed = found.name
+        else:
+            shutil.copy(a.seed, MASTER_FILE)
         st = load_state()
         # The seeded master is already up to date, so everything Katie has sent so far
         # counts as done — otherwise the first run would refill weeks of history.
