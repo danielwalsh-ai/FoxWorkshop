@@ -220,7 +220,20 @@ class SheetXmlEditor:
 
 # ---- main fill -------------------------------------------------------------
 
-def fill_master(master, daily, transactions, out, date_override=None, value_col=3):
+def _column_earnings(wsv, col):
+    """Sum the wagon rows of one date column (ignores 'VOR' and other text)."""
+    total = 0.0
+    for r in VEHICLE_ROWS:
+        v = wsv.cell(row=r, column=col).value
+        if isinstance(v, (int, float)):
+            total += float(v)
+    return round(total, 2)
+
+
+def fill_master(master, daily, transactions, out, date_override=None, value_col=3,
+                replace=False):
+    """Fill one day column.  replace=True overwrites a day that is already
+    populated (Katie re-sends corrections) and reports the before/after total."""
     report_date, earnings, wagon_count = read_daily_file(daily, date_override, value_col)
     parts = workshop = tyres = None
     if transactions:
@@ -231,7 +244,9 @@ def fill_master(master, daily, transactions, out, date_override=None, value_col=
     # Per-column guard: refuse only if the TARGET column itself already holds data.
     # (The old `target_col <= last_pop_col` test blocked backfilling an empty gap that
     #  sits before a later populated column — e.g. filling 23-30 Jun when 2 Jul is done.)
-    if ws.cell(row=ROW_TOTAL_EARNINGS, column=target_col).value not in (None, ''):
+    was_populated = ws.cell(row=ROW_TOTAL_EARNINGS, column=target_col).value not in (None, '')
+    previous_total = _column_earnings(wsv, target_col) if was_populated else None
+    if was_populated and not replace:
         raise ValueError(f"{report_date} maps to column {get_column_letter(target_col)} "
                          f"which is already populated - refusing to overwrite")
     # Source column for styles + standing formulas = nearest populated column strictly
@@ -268,6 +283,13 @@ def fill_master(master, daily, transactions, out, date_override=None, value_col=
             cl = get_column_letter(c)
             ed.write(DATE_ROW, cl, value=(d - EPOCH).days, style=s2)
             ed.write(DAYNAME_ROW, cl, formula=f'TEXT({cl}2, "dddd")', style=s1)
+
+    # On a replace, clear any wagon row the corrected sheet no longer carries —
+    # otherwise a reg dropped from the revision would keep yesterday's figure.
+    if was_populated:
+        for r in VEHICLE_ROWS:
+            if r not in fills:
+                ed.write(r, TL, style=ed.style_of(r, src_col_letter))
 
     for r, v in fills.items():
         st = ed.style_of(r, src_col_letter)
@@ -329,6 +351,7 @@ def fill_master(master, daily, transactions, out, date_override=None, value_col=
         'vor_count': vors, 'no_wagons': wagon_count,
         'parts': parts, 'workshop': workshop, 'tyres': tyres,
         'master_regs_not_in_daily_file': sorted(unmatched_master),
+        'replaced': was_populated, 'previous_total': previous_total,
     }
 
 
