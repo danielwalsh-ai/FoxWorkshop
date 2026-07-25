@@ -477,7 +477,7 @@ def send(final_path, results, note, dry_run=False):
          {ordinal(last.day)} {last:%B}.</p>
       <hr style="border:none;border-top:1px solid #ccc">
       <p style="font-size:12px;color:#888">Updated automatically from Katie's run sheets
-         by Knowles Farm Ltd.</p>
+         by danielwalsh.ai</p>
     </div>"""
     plain = (note + "\n\n" if note else "") + "\n".join(
         f"{dt.date.fromisoformat(r['date']):%a} {dt.date.fromisoformat(r['date']).day} "
