@@ -409,15 +409,105 @@ def topup_costs(master, tmpdir):
 
 
 # ── build ───────────────────────────────────────────────────────────
-def explain_fill_error(day, err):
+# Row numbers are hard-coded in wagon_master_fill, so if a row is ever inserted for a
+# new wagon everything below shifts and earnings would land in the wrong rows. These
+# labels pin the layout: if any has moved, stop rather than corrupt the master.
+ANCHORS = {
+    20: 'HOOKS AVERAGE', 21: 'HOOKS TOTAL',
+    24: 'HOOKS ON HIRE AVERAGE', 25: 'HOOKS ON HIRE TOTAL',
+    73: '8 W AVERAGE', 74: '8 W TOTAL',
+    100: 'ALLY BODY AVERAGE', 101: 'ALLY BODY TOTAL',
+    112: 'ARTICS AVERAGE', 113: 'ARTICS TOTAL',
+    121: 'GRABS AVERAGE', 122: 'GRABS TOTAL',
+    138: 'SWEEPER AVERAGE', 139: 'SWEEPER TOTAL',
+    150: '8W SLEEPERS AVERAGE', 151: '8W SLEEPER TOTAL',
+    167: 'NIGHT WORK', 168: 'TOTAL EARNINGS', 169: 'NO WAGONS',
+    176: 'DAILY COSTINGS PARTS', 177: 'DAILY COSTINGS WORKSHOP',
+    178: 'DAILY COSTINGS TYRES',
+}
+# Wagons live between a block's heading and its AVERAGE row.
+BLOCKS = [('HOOKS', 4, 19), ('HOOKS ON HIRE', 23, 23), ('8W', 27, 72),
+          ('ALLY BODY', 76, 99), ('ARTICS', 103, 111), ('GRABS', 115, 120),
+          ('SWEEPER', 124, 137), ('8W SLEEPERS', 141, 149),
+          ('ARTIC NIGHT WORK', 161, 166)]
+
+
+def check_structure(master):
+    """Confirm the master still has the shape the row numbers assume."""
+    ws = openpyxl.load_workbook(str(master))['DAILY']
+    moved = []
+    for row, label in ANCHORS.items():
+        got = str(ws.cell(row, 1).value or '').strip()
+        if got.upper() != label.upper():
+            moved.append(f"row {row} should read {label!r} but reads {got!r}")
+    return moved
+
+
+def block_for_row(row):
+    for name, a, b in BLOCKS:
+        if a <= row <= b:
+            return name, a, b
+    return None, None, None
+
+
+def suggest_placement(master, daily_path, value_col, new_regs):
+    """Say where a new wagon belongs, by looking at who it sits between on Katie's
+    sheet and finding those neighbours in the master."""
+    ws_m = openpyxl.load_workbook(str(master))['DAILY']
+    where = {}
+    for name, a, b in BLOCKS:
+        for r in range(a, b + 1):
+            v = str(ws_m.cell(r, 1).value or '').strip().upper()
+            if v:
+                where[v] = (r, name)
+    ws_d = openpyxl.load_workbook(str(daily_path), data_only=True)['Wagons']
+    order = []
+    for r in range(3, ws_d.max_row + 1):
+        v = ws_d.cell(r, 1).value
+        if isinstance(v, str) and v.strip():
+            if v.strip() == 'VEHICLE':
+                break
+            order.append(v.strip().upper())
+    out = []
+    for reg in new_regs:
+        if reg not in order:
+            out.append(f"{reg}: not found on the sheet"); continue
+        i = order.index(reg)
+        above = next((where[order[j]] for j in range(i - 1, -1, -1)
+                      if order[j] in where), None)
+        below = next((where[order[j]] for j in range(i + 1, len(order))
+                      if order[j] in where), None)
+        if above and below and above[1] == below[1]:
+            out.append(f"{reg}: belongs in {above[1]} — insert a row at {above[0] + 1} "
+                       f"(it sits between {order[i-1]} and {order[i+1]} on Katie's sheet)")
+        elif above:
+            out.append(f"{reg}: sits after {order[i-1]} in {above[1]} — "
+                       f"insert a row at {above[0] + 1}")
+        else:
+            out.append(f"{reg}: could not place automatically — check which block it "
+                       f"belongs to on Katie's sheet")
+    return out
+
+
+def explain_fill_error(day, err, master=None, daily=None, value_col=3):
     """Turn a fill failure into something Daniel can act on."""
     m = re.search(r"would be lost\): \{(.*)\}", str(err))
-    if m:
-        return (f"{day:%a %d %b}: Katie's sheet has registration(s) the master doesn't "
-                f"have — {m.group(1)}. That day was skipped rather than drop the "
-                f"earnings. Add the reg to the master in the right category block and "
-                f"it will fill by itself on the next run.")
-    return f"{day:%a %d %b}: {err}"
+    if not m:
+        return f"{day:%a %d %b}: {err}"
+    regs = dict(re.findall(r"'([A-Z0-9 ]+)':\s*([0-9.]+)", m.group(1)))
+    lines = [f"{day:%a %d %b}: NEW WAGON on Katie's sheet, not yet in the master."]
+    for reg, amt in regs.items():
+        lines.append(f"    {reg} earned £{float(amt):,.2f}")
+    if master and daily:
+        try:
+            for hint in suggest_placement(master, daily, value_col, list(regs)):
+                lines.append(f"    {hint}")
+        except Exception:
+            pass
+    lines.append("    The day is skipped for now so the earnings aren't lost. Insert a "
+                 "row in Excel (Excel fixes the formulas itself), then send me the "
+                 "master — the day fills automatically once the rows line up.")
+    return "\n".join(lines)
 
 
 def build(master, days, tmpdir):
@@ -432,7 +522,9 @@ def build(master, days, tmpdir):
                             str(out), date_override=day["date"],
                             value_col=day["value_col"], replace=True)
         except Exception as e:
-            skipped.append(explain_fill_error(day["date"], e))
+            skipped.append(explain_fill_error(day["date"], e, master=current,
+                                              daily=day["file"],
+                                              value_col=day["value_col"]))
             print(f"  {day['date']} ({day['date']:%a}) SKIPPED: {e}")
             continue
         r["subject"] = day["subject"]
@@ -680,6 +772,22 @@ def run(dry_run=False, since_days=21, out_dir=None):
             print("No stored master and none found in Gmail. Seed it first:\n"
                   '  python wagon_auto.py --seed "<path to current master>"')
             return 2
+
+        moved = check_structure(MASTER_FILE)
+        if moved:
+            print("MASTER LAYOUT CHANGED — refusing to fill:")
+            for m in moved:
+                print(f"  - {m}")
+            notify_daniel(
+                "Wagon master — layout has shifted, filling paused",
+                "The master's rows have moved, most likely a row inserted for a new "
+                "wagon. Filling is paused because the row numbers are hard-coded and "
+                "earnings would land in the wrong rows.\n\n"
+                + "\n".join(f"  - {m}" for m in moved)
+                + "\n\nSend me the master and I'll re-point the code at the new rows; "
+                  "it's a small change and everything resumes.",
+                dry_run, state=state, key="layout:" + "|".join(moved)[:150])
+            return 1
         # Costs first: days filled before that evening's workshop report catch up here.
         master_in = MASTER_FILE
         topped, topped_days = topup_costs(MASTER_FILE, tmp)
