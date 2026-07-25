@@ -61,6 +61,8 @@ ROW_TOTAL_EARNINGS, ROW_PARTS, ROW_WORKSHOP, ROW_TYRES = 168, 176, 177, 178
 MAX_PLAUSIBLE_DAY = 250_000      # a decimal slip would sail past this
 MIN_PLAUSIBLE_WEEKDAY = 20_000   # weekdays have run £75k–£97k all month
 DATE_WINDOW_DAYS = 90            # a mistyped year must not land in last year's column
+IMAP_TIMEOUT = 90                # never let a stalled socket wedge a scheduled run
+MAX_SCAN = 12                    # newest N candidates only; don't trawl the mailbox
 
 
 def load_env():
@@ -115,28 +117,61 @@ def _attachments(msg, tmpdir, want=".xlsx"):
     return out
 
 
-def fetch_katie_emails(tmpdir, since_days=21):
-    """Newest-last list of {id, subject, date, files} from Katie's run-sheet emails."""
-    M = imaplib.IMAP4_SSL("imap.gmail.com")
+def _connect():
+    """IMAP with a timeout. Without one a stalled socket blocks the run forever —
+    which is exactly how the first scheduled run hung."""
+    M = imaplib.IMAP4_SSL("imap.gmail.com", timeout=IMAP_TIMEOUT)
     M.login(ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"])
-    M.select("INBOX")
-    since = (dt.date.today() - dt.timedelta(days=since_days)).strftime("%d-%b-%Y")
-    typ, data = M.search(None, f'(SINCE "{since}" FROM "{KATIE}" SUBJECT "Wagon earnings")')
-    found = []
-    for uid in data[0].split():
-        typ, md = M.fetch(uid, "(RFC822)")
-        msg = email.message_from_bytes(md[0][1])
-        d = email.utils.parsedate_to_datetime(msg.get("Date"))
-        sub = str(email.header.make_header(email.header.decode_header(msg.get("Subject", ""))))
-        box = Path(tmpdir) / (msg.get("Message-ID", uid.decode()).strip("<>").replace("/", "_")[:60])
-        box.mkdir(parents=True, exist_ok=True)
-        files = _attachments(msg, box)
-        if files:
-            found.append({"id": msg.get("Message-ID", uid.decode()),
-                          "subject": sub, "date": d, "files": files})
-    M.logout()
-    found.sort(key=lambda m: m["date"])       # oldest first — newest correction wins
-    return found
+    return M
+
+
+def fetch_katie_emails(tmpdir, since_days=21, wanted=None):
+    """Newest-last list of {id, subject, date, files} from Katie's run-sheet emails.
+
+    Headers are fetched first and bodies only for mail `wanted` still needs. Run
+    sheets are ~350KB each, so pulling three weeks of them every 15 minutes moves
+    tens of MB for nothing — that is what hung the first scheduled run.
+    """
+    M = _connect()
+    try:
+        M.select("INBOX")
+        since = (dt.date.today() - dt.timedelta(days=since_days)).strftime("%d-%b-%Y")
+        typ, data = M.search(None,
+                             f'(SINCE "{since}" FROM "{KATIE}" SUBJECT "Wagon earnings")')
+        heads = []
+        for uid in data[0].split():
+            typ, md = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE SUBJECT)])")
+            if not md or not md[0]:
+                continue
+            h = email.message_from_bytes(md[0][1])
+            raw_date = h.get("Date")
+            heads.append({
+                "uid": uid,
+                "id": (h.get("Message-ID") or uid.decode()).strip(),
+                "date": email.utils.parsedate_to_datetime(raw_date) if raw_date else None,
+                "subject": str(email.header.make_header(
+                    email.header.decode_header(h.get("Subject", "")))),
+            })
+        heads = [h for h in heads if h["date"]]
+        heads.sort(key=lambda m: m["date"])       # oldest first — newest correction wins
+        todo = [h for h in heads if wanted is None or wanted(h)]
+
+        found = []
+        for h in todo:                            # only now pay for the attachments
+            typ, md = M.fetch(h["uid"], "(RFC822)")
+            msg = email.message_from_bytes(md[0][1])
+            box = Path(tmpdir) / h["id"].strip("<>").replace("/", "_")[:60]
+            box.mkdir(parents=True, exist_ok=True)
+            files = _attachments(msg, box)
+            if files:
+                found.append({"id": h["id"], "subject": h["subject"],
+                              "date": h["date"], "files": files})
+        return found, heads
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
 
 
 def report_date_of(name):
@@ -157,23 +192,31 @@ def _covers(report_day, target):
 
 
 def fetch_transaction_report(tmpdir, target):
-    """Newest workshop report that actually covers `target`, from Gmail. None if absent."""
-    M = imaplib.IMAP4_SSL("imap.gmail.com")
-    M.login(ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"])
-    M.select('"[Gmail]/All Mail"')
-    since = target.strftime("%d-%b-%Y")
-    typ, data = M.search(None, f'(SINCE "{since}" SUBJECT "Daily Workshop Spend Report")')
-    for uid in reversed(data[0].split()):     # newest first
-        typ, md = M.fetch(uid, "(RFC822)")
-        msg = email.message_from_bytes(md[0][1])
-        box = Path(tmpdir) / f"tx_{uid.decode()}"
-        box.mkdir(parents=True, exist_ok=True)
-        for f in _attachments(msg, box):
-            if _covers(report_date_of(f.name), target):
-                M.logout()
-                return f
-    M.logout()
-    return None
+    """Newest workshop report that actually covers `target`, from Gmail. None if absent.
+
+    Matched on subject, not filename: Gmail's filename: operator does not reliably
+    match fox_transaction_report_DD-MM-YYYY.xlsx, and switching to it silently lost
+    the parts/tyres figures."""
+    M = _connect()
+    try:
+        M.select('"[Gmail]/All Mail"')
+        since = target.strftime("%d-%b-%Y")
+        typ, data = M.search(None,
+                             f'(SINCE "{since}" SUBJECT "Daily Workshop Spend Report")')
+        for uid in reversed(data[0].split()[-MAX_SCAN:]):     # newest first
+            typ, md = M.fetch(uid, "(RFC822)")
+            msg = email.message_from_bytes(md[0][1])
+            box = Path(tmpdir) / f"tx_{uid.decode()}"
+            box.mkdir(parents=True, exist_ok=True)
+            for f in _attachments(msg, box):
+                if _covers(report_date_of(f.name), target):
+                    return f
+        return None
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
 
 
 def fetch_master_from_gmail(tmpdir, since_days=30):
@@ -181,25 +224,28 @@ def fetch_master_from_gmail(tmpdir, since_days=30):
 
     Saves hauling a 1.6MB workbook onto the server by hand — email it to yourself
     (or let a previous run's email to Paul serve) and seed straight from Gmail."""
-    M = imaplib.IMAP4_SSL("imap.gmail.com")
-    M.login(ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"])
-    M.select('"[Gmail]/All Mail"')
-    since = (dt.date.today() - dt.timedelta(days=since_days)).strftime("%Y/%m/%d")
-    typ, data = M.search(None, "X-GM-RAW",
-                         f'"has:attachment filename:xlsx after:{since}"')
-    uids = data[0].split()
-    for uid in reversed(uids):                       # newest first
-        typ, md = M.fetch(uid, "(RFC822)")
-        msg = email.message_from_bytes(md[0][1])
-        box = Path(tmpdir) / f"seed_{uid.decode()}"
-        box.mkdir(parents=True, exist_ok=True)
-        for f in _attachments(msg, box):
-            if f.name.lower().startswith("daily wagon earnings"):
-                M.logout()
-                return f, msg.get("Subject", ""), email.utils.parsedate_to_datetime(
-                    msg.get("Date"))
-    M.logout()
-    return None, None, None
+    M = _connect()
+    try:
+        M.select('"[Gmail]/All Mail"')
+        since = (dt.date.today() - dt.timedelta(days=since_days)).strftime("%Y/%m/%d")
+        # Match the filename directly rather than every xlsx in the mailbox.
+        typ, data = M.search(None, "X-GM-RAW",
+                             f'"filename:\\"Daily wagon earnings\\" after:{since}"')
+        for uid in reversed(data[0].split()[-MAX_SCAN:]):     # newest first
+            typ, md = M.fetch(uid, "(RFC822)")
+            msg = email.message_from_bytes(md[0][1])
+            box = Path(tmpdir) / f"seed_{uid.decode()}"
+            box.mkdir(parents=True, exist_ok=True)
+            for f in _attachments(msg, box):
+                if f.name.lower().startswith("daily wagon earnings"):
+                    return f, msg.get("Subject", ""), email.utils.parsedate_to_datetime(
+                        msg.get("Date"))
+        return None, None, None
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
 
 
 def ensure_master(tmpdir, state):
@@ -609,14 +655,16 @@ def run(dry_run=False, since_days=21, out_dir=None):
                 shutil.copy(topped, MASTER_FILE)
                 master_in = MASTER_FILE
 
-        msgs = fetch_katie_emails(tmp, since_days)
         mark = state.get("watermark")
         mark = dt.datetime.fromisoformat(mark) if mark else None
-        new = [m for m in msgs
-               if m["id"] not in state["processed_message_ids"]
-               and (mark is None or m["date"] > mark)]
+        done = set(state["processed_message_ids"])
+
+        def is_new(h):
+            return h["id"] not in done and (mark is None or h["date"] > mark)
+
+        new, heads = fetch_katie_emails(tmp, since_days, wanted=is_new)
         if not new:
-            print("Nothing new from Katie.")
+            print(f"Nothing new from Katie ({len(heads)} email(s) checked).")
             return 0
         print(f"{len(new)} new email(s) from Katie:")
         for m in new:
@@ -710,7 +758,8 @@ def main():
         # The seeded master is already up to date, so everything Katie has sent so far
         # counts as done — otherwise the first run would refill weeks of history.
         with tempfile.TemporaryDirectory() as tmp:
-            seen = fetch_katie_emails(tmp, a.since_days)
+            # headers are enough to mark history as done — skip the attachments
+            _, seen = fetch_katie_emails(tmp, a.since_days, wanted=lambda h: False)
         st["processed_message_ids"] = [m["id"] for m in seen]
         st.pop("watermark", None)      # this master IS current; no recovery point needed
         save_state(st)
