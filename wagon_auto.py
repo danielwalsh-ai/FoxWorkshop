@@ -63,6 +63,7 @@ MIN_PLAUSIBLE_WEEKDAY = 20_000   # weekdays have run £75k–£97k all month
 DATE_WINDOW_DAYS = 90            # a mistyped year must not land in last year's column
 IMAP_TIMEOUT = 90                # never let a stalled socket wedge a scheduled run
 MAX_SCAN = 12                    # newest N candidates only; don't trawl the mailbox
+ALERT_QUIET_HOURS = 12           # don't re-send the same alert on every 15-min run
 
 
 def load_env():
@@ -408,13 +409,32 @@ def topup_costs(master, tmpdir):
 
 
 # ── build ───────────────────────────────────────────────────────────
+def explain_fill_error(day, err):
+    """Turn a fill failure into something Daniel can act on."""
+    m = re.search(r"would be lost\): \{(.*)\}", str(err))
+    if m:
+        return (f"{day:%a %d %b}: Katie's sheet has registration(s) the master doesn't "
+                f"have — {m.group(1)}. That day was skipped rather than drop the "
+                f"earnings. Add the reg to the master in the right category block and "
+                f"it will fill by itself on the next run.")
+    return f"{day:%a %d %b}: {err}"
+
+
 def build(master, days, tmpdir):
-    results, current = [], master
+    """Fill each day. A day that fails is skipped, not fatal — one new wagon must
+    not hold up the days that are perfectly fine."""
+    results, skipped, current = [], [], master
     for i, day in enumerate(days):
         tx = transaction_report_for(day["date"], tmpdir)
         out = Path(tmpdir) / f"step_{i:02d}.xlsx"
-        r = fill_master(str(current), str(day["file"]), str(tx) if tx else None, str(out),
-                        date_override=day["date"], value_col=day["value_col"], replace=True)
+        try:
+            r = fill_master(str(current), str(day["file"]), str(tx) if tx else None,
+                            str(out), date_override=day["date"],
+                            value_col=day["value_col"], replace=True)
+        except Exception as e:
+            skipped.append(explain_fill_error(day["date"], e))
+            print(f"  {day['date']} ({day['date']:%a}) SKIPPED: {e}")
+            continue
         r["subject"] = day["subject"]
         r["had_costs"] = tx is not None
         results.append(r)
@@ -422,9 +442,11 @@ def build(master, days, tmpdir):
         flag = "revised" if r["replaced"] else "new"
         print(f"  {day['date']} ({day['date']:%a}) col {r['column']}  "
               f"£{r['expected_total_earnings']:,.2f}  {flag}")
+    if not results:
+        return None, [], skipped
     final = Path(tmpdir) / "final.xlsx"
     tidy_master.tidy(str(current), str(final))
-    return final, results
+    return final, results, skipped
 
 
 def validate(results):
@@ -606,8 +628,22 @@ def send(final_path, results, note, dry_run=False):
     return fname
 
 
-def notify_daniel(subject, body, dry_run=False):
-    """Anything Daniel needs to see but Paul doesn't."""
+def notify_daniel(subject, body, dry_run=False, state=None, key=None):
+    """Anything Daniel needs to see but Paul doesn't.
+
+    A day held back for a new registration is retried every run so it heals the
+    moment the master is fixed — `key` stops that turning into an alert every 15
+    minutes. The same alert goes out at most once per ALERT_QUIET_HOURS."""
+    if key is not None and state is not None:
+        seen = state.setdefault("alerts", {})
+        last = seen.get(key)
+        if last:
+            age = dt.datetime.now() - dt.datetime.fromisoformat(last)
+            if age < dt.timedelta(hours=ALERT_QUIET_HOURS):
+                print(f"  (already flagged {age.seconds // 3600}h ago, not re-sending: {key})")
+                return
+        seen[key] = dt.datetime.now().isoformat(timespec="seconds")
+        save_state(state)
     if dry_run:
         print(f"\n[DRY RUN] would email Daniel — {subject}\n{body}\n")
         return
@@ -689,10 +725,20 @@ def run(dry_run=False, since_days=21, out_dir=None):
 
         print(f"\nfilling {len(days)} day(s):")
         try:
-            final, results = build(master_in, days, tmp)
+            final, results, skipped = build(master_in, days, tmp)
         except Exception as e:
             print(f"BUILD FAILED: {e}")
             alert_daniel([f"build failed: {e}"], [], dry_run)
+            return 1
+        rejected += skipped
+        if not results:
+            # Every day was held back. Leave the emails unprocessed so this heals
+            # by itself once the master is corrected, but only say so once.
+            print("No day could be filled.")
+            notify_daniel("Wagon master — a day is waiting on the master",
+                          "Nothing could be filled from Katie's latest:\n\n"
+                          + "\n".join(f"  - {r}" for r in rejected),
+                          dry_run, state=state, key="|".join(sorted(rejected))[:200])
             return 1
 
         problems = validate(results)
@@ -709,16 +755,19 @@ def run(dry_run=False, since_days=21, out_dir=None):
 
         if rejected:      # good days went to Paul; the data issue is Daniel's to chase
             notify_daniel(
-                "Wagon run sheets — one to check with Katie",
+                "Wagon run sheets — one to check",
                 "The master went to Paul with the days that were fine. These were set "
                 "aside:\n\n" + "\n".join(f"  - {r}" for r in rejected)
-                + "\n\nOnce Katie re-sends a corrected sheet it will be picked up "
-                  "automatically on the next run.", dry_run)
+                + "\n\nEach is retried every run, so it will go through by itself once "
+                  "the master is updated or Katie re-sends a corrected sheet.",
+                dry_run, state=state, key="|".join(sorted(rejected))[:200])
 
         if not dry_run:
             shutil.copy(final, MASTER_FILE)           # promote only after a clean send
-            state["processed_message_ids"] += [m["id"] for m in new]
-            state["processed_message_ids"] = state["processed_message_ids"][-500:]
+            if not skipped:
+                # A skipped day must stay unprocessed so it retries and self-heals.
+                state["processed_message_ids"] += [m["id"] for m in new]
+                state["processed_message_ids"] = state["processed_message_ids"][-500:]
             save_state(state)
         if out_dir:
             Path(out_dir).mkdir(parents=True, exist_ok=True)
