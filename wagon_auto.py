@@ -64,7 +64,8 @@ DATE_WINDOW_DAYS = 90            # a mistyped year must not land in last year's 
 IMAP_TIMEOUT = 90                # never let a stalled socket wedge a scheduled run
 MAX_SCAN = 12                    # newest N candidates only; don't trawl the mailbox
 ALERT_QUIET_HOURS = 12           # don't re-send the same alert on every 15-min run
-TOPUP_DAYS = 21                  # costs land within a day or two; older gaps stay manual
+TOPUP_DAYS = 7                   # only covers a day filled before that evening's
+                                 # workshop report existed — costs land next run
 
 
 def load_env():
