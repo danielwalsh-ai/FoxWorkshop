@@ -670,7 +670,7 @@ def rows_html(results):
     return "\n".join(out)
 
 
-def send(final_path, results, note, dry_run=False):
+def send(final_path, results, note, dry_run=False, to_me=False):
     last = max(dt.date.fromisoformat(r["date"]) for r in results)
     fname = master_filename(last)
     subject = f"Wagon earnings — master updated to {ordinal(last.day)} {last:%B}"
@@ -695,11 +695,16 @@ def send(final_path, results, note, dry_run=False):
         f"{dt.date.fromisoformat(r['date']):%b}: "
         f"£{r['expected_total_earnings']:,.2f}" for r in results)
 
+    # --to-me proves the whole path (fill, tidy, commentary, SMTP, attachment)
+    # without anything reaching Paul.
+    to = [ENV["GMAIL_USER"]] if to_me else SEND_TO
+    cc = [] if to_me else SEND_CC
     m = EmailMessage()
     m["From"] = f"Daniel Walsh <{ENV['GMAIL_USER']}>"
-    m["To"] = ", ".join(SEND_TO)
-    m["Cc"] = ", ".join(SEND_CC)
-    m["Subject"] = subject
+    m["To"] = ", ".join(to)
+    if cc:
+        m["Cc"] = ", ".join(cc)
+    m["Subject"] = ("[TEST — would go to Paul] " if to_me else "") + subject
     m.set_content(plain)
     m.add_alternative(html, subtype="html")
     m.add_attachment(Path(final_path).read_bytes(), maintype="application",
@@ -716,7 +721,8 @@ def send(final_path, results, note, dry_run=False):
         s.starttls(context=ctx)
         s.login(ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"])
         s.send_message(m)
-    print(f"  sent to {', '.join(SEND_TO)} (cc {', '.join(SEND_CC)}) — {fname}")
+    print(f"  sent to {', '.join(to)}"
+          + (f" (cc {', '.join(cc)})" if cc else "") + f" — {fname}")
     return fname
 
 
@@ -765,7 +771,7 @@ def alert_daniel(problems, results, dry_run=False):
 
 
 # ── main ────────────────────────────────────────────────────────────
-def run(dry_run=False, since_days=21, out_dir=None):
+def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
     state = load_state()
     with tempfile.TemporaryDirectory() as tmp:
         if not ensure_master(tmp, state):
@@ -859,7 +865,7 @@ def run(dry_run=False, since_days=21, out_dir=None):
 
         last = max(dt.date.fromisoformat(r["date"]) for r in results)
         note = commentary(results, month_context(final, last))
-        fname = send(final, results, note, dry_run)
+        fname = send(final, results, note, dry_run, to_me=to_me)
 
         if rejected:      # good days went to Paul; the data issue is Daniel's to chase
             notify_daniel(
@@ -895,6 +901,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="build but send nothing")
     ap.add_argument("--since-days", type=int, default=21)
     ap.add_argument("--out-dir", help="also drop the finished master here")
+    ap.add_argument("--to-me", action="store_true",
+                    help="send the real email to Daniel only, not Paul")
     a = ap.parse_args()
 
     if a.seed or a.seed_from_gmail:
@@ -927,7 +935,8 @@ def main():
     if not (a.once or a.scheduled):
         ap.print_help()
         return 1
-    return run(dry_run=a.dry_run, since_days=a.since_days, out_dir=a.out_dir)
+    return run(dry_run=a.dry_run, since_days=a.since_days, out_dir=a.out_dir,
+               to_me=a.to_me)
 
 
 if __name__ == "__main__":
