@@ -64,6 +64,7 @@ DATE_WINDOW_DAYS = 90            # a mistyped year must not land in last year's 
 IMAP_TIMEOUT = 90                # never let a stalled socket wedge a scheduled run
 MAX_SCAN = 12                    # newest N candidates only; don't trawl the mailbox
 ALERT_QUIET_HOURS = 12           # don't re-send the same alert on every 15-min run
+TOPUP_DAYS = 21                  # costs land within a day or two; older gaps stay manual
 
 
 def load_env():
@@ -359,7 +360,9 @@ def topup_costs(master, tmpdir):
     can land with earnings only. This picks them up once the report exists, which
     keeps the master converging without anyone having to notice."""
     sheet_path, date_cols, _, _, _, ws, wsv = master_state(str(master))
-    floor = dt.date.today() - dt.timedelta(days=DATE_WINDOW_DAYS)
+    # Deliberately narrow: chasing reports for months-old days costs a 90s IMAP
+    # timeout each and never finds anything.
+    floor = dt.date.today() - dt.timedelta(days=TOPUP_DAYS)
     todo = []
     for d, c in sorted(date_cols.items()):
         if d < floor or d > dt.date.today() or d.weekday() >= 5:
