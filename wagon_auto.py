@@ -1,7 +1,8 @@
 """
 Wagon master automation — Katie's run sheets in, updated master out to Paul.
 
-Watches Daniel's Gmail for Katie Ward's "Wagon earnings ..." emails, fills every
+Watches Daniel's Gmail for "Wagon earnings ..." emails — normally Katie Ward's, but
+Emmy Duckworth covers when she is off and Paul forwards them on — fills every
 run sheet attached (she batches days and re-sends corrections), pulls parts/tyres
 from the workshop transaction report, tidies the formatting, then emails the
 master to Paul Fox with Daniel copied in.
@@ -52,7 +53,17 @@ STATE_DIR = HERE / "state"
 STATE_FILE = STATE_DIR / "wagon_auto.json"
 MASTER_FILE = STATE_DIR / "wagon_master.xlsx"
 
-KATIE = "katie.ward@hurtplant.co.uk"
+# Katie normally sends, but Emmy Duckworth covers when she's off and Paul forwards
+# them on. Matching is by subject + a valid run sheet, so this list only has to say
+# whose mail is worth opening.
+SENDERS = {
+    "katie.ward@hurtplant.co.uk",     # Katie Ward
+    "emmy@hurtplant.co.uk",           # Emmy Duckworth — covers for Katie
+    "paulfox@foxbrothers.co.uk",      # Paul forwards them on
+    "simon@foxbrothers.co.uk",        # Simon is on the same distribution
+}
+# Our own outgoing subject also contains "Wagon earnings"; never re-ingest it.
+OWN_SUBJECT = "master updated to"
 SEND_TO = ["paulfox@foxbrothers.co.uk"]
 SEND_CC = ["daniel.walsh@kfltd.uk"]
 MODEL = "claude-sonnet-5"
@@ -139,21 +150,27 @@ def fetch_katie_emails(tmpdir, since_days=21, wanted=None):
     try:
         M.select("INBOX")
         since = (dt.date.today() - dt.timedelta(days=since_days)).strftime("%d-%b-%Y")
-        typ, data = M.search(None,
-                             f'(SINCE "{since}" FROM "{KATIE}" SUBJECT "Wagon earnings")')
+        # Search on subject and filter senders here — an IMAP OR chain over four
+        # addresses is unreadable, and "FW: Wagon earnings - 24/07/2026" still matches.
+        typ, data = M.search(None, f'(SINCE "{since}" SUBJECT "Wagon earnings")')
         heads = []
         for uid in data[0].split():
-            typ, md = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE SUBJECT)])")
+            typ, md = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE SUBJECT FROM)])")
             if not md or not md[0]:
                 continue
             h = email.message_from_bytes(md[0][1])
+            sender = email.utils.parseaddr(h.get("From", ""))[1].lower()
+            subject = str(email.header.make_header(
+                email.header.decode_header(h.get("Subject", ""))))
+            if sender not in SENDERS or OWN_SUBJECT in subject.lower():
+                continue
             raw_date = h.get("Date")
             heads.append({
                 "uid": uid,
                 "id": (h.get("Message-ID") or uid.decode()).strip(),
                 "date": email.utils.parsedate_to_datetime(raw_date) if raw_date else None,
-                "subject": str(email.header.make_header(
-                    email.header.decode_header(h.get("Subject", "")))),
+                "subject": subject,
+                "from": sender,
             })
         heads = [h for h in heads if h["date"]]
         heads.sort(key=lambda m: m["date"])       # oldest first — newest correction wins
@@ -168,7 +185,8 @@ def fetch_katie_emails(tmpdir, since_days=21, wanted=None):
             files = _attachments(msg, box)
             if files:
                 found.append({"id": h["id"], "subject": h["subject"],
-                              "date": h["date"], "files": files})
+                              "date": h["date"], "files": files,
+                              "from": h.get("from", "")})
         return found, heads
     finally:
         try:
@@ -820,9 +838,10 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
         if not new:
             print(f"Nothing new from Katie ({len(heads)} email(s) checked).")
             return 0
-        print(f"{len(new)} new email(s) from Katie:")
+        print(f"{len(new)} new run-sheet email(s):")
         for m in new:
-            print(f"  {m['date']:%Y-%m-%d %H:%M}  {m['subject']}  "
+            print(f"  {m['date']:%Y-%m-%d %H:%M}  {m['subject']}")
+            print(f"      from {m.get('from', '?')}  "
                   f"({len(m['files'])} attachment(s))")
 
         days, rejected = collect_days(new)
@@ -930,7 +949,9 @@ def main():
             # headers are enough to mark history as done — skip the attachments
             _, seen = fetch_katie_emails(tmp, a.since_days, wanted=lambda h: False)
         st["processed_message_ids"] = [m["id"] for m in seen]
-        st.pop("watermark", None)      # this master IS current; no recovery point needed
+        # Watermark as well as ids: if the sender list is ever widened, mail that was
+        # previously invisible must not suddenly replay weeks of history.
+        st["watermark"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         save_state(st)
         print(f"Seeded master from {a.seed} -> {MASTER_FILE}")
         print(f"Marked {len(seen)} existing email(s) from Katie as already done.")
