@@ -60,8 +60,12 @@ SENDERS = {
     "katie.ward@hurtplant.co.uk",     # Katie Ward
     "emmy@hurtplant.co.uk",           # Emmy Duckworth — covers for Katie
     "paulfox@foxbrothers.co.uk",      # Paul forwards them on
-    "simon@foxbrothers.co.uk",        # Simon is on the same distribution
 }
+# Deliberately NOT simon@foxbrothers.co.uk: he sends the *Lancashire* pack, subject
+# "Daily Wagon Earnings Pack — ...", which substring-matches our subject search.
+# Lancashire is a separate business with a separate fleet — zero registrations in
+# common with Leyland — so a sheet is also checked against the master's own wagons.
+FLEET_MATCH_MIN = 0.70            # a real Leyland sheet scores 100%; Lancashire 0%
 # Our own outgoing subject also contains "Wagon earnings"; never re-ingest it.
 OWN_SUBJECT = "master updated to"
 SEND_TO = ["paulfox@foxbrothers.co.uk"]
@@ -340,11 +344,32 @@ def filename_date(name):
         return None
 
 
-def collect_days(messages):
+def master_regs(master):
+    ws = openpyxl.load_workbook(str(master))['DAILY']
+    regs = {str(ws.cell(r, 1).value or '').strip().upper() for r in VEHICLE_ROWS}
+    regs.discard('')
+    return regs
+
+
+def fleet_match(regs, path, value_col):
+    """Fraction of a sheet's wagons that are ours. Leyland sheets score 1.0;
+    a Lancashire sheet scores 0.0 — the two fleets share no registrations."""
+    from wagon_master_fill import read_daily_file
+    try:
+        _, earnings, _ = read_daily_file(str(path), dt.date(2000, 1, 1), value_col)
+    except Exception:
+        return None
+    if not earnings:
+        return None
+    return sum(1 for r in earnings if r in regs) / len(earnings)
+
+
+def collect_days(messages, regs=None):
     """One entry per date across every attachment; a later email supersedes an earlier.
 
     Dates outside a sane window are set aside rather than filled — a mistyped year
-    would otherwise land in a column from a previous year."""
+    would otherwise land in a column from a previous year. Sheets whose wagons
+    aren't ours (Lancashire) are refused outright."""
     floor = dt.date.today() - dt.timedelta(days=DATE_WINDOW_DAYS)
     today = dt.date.today()
     by_date, rejected = {}, []
@@ -357,6 +382,14 @@ def collect_days(messages):
                 continue
             if not found:
                 rejected.append(f"{f.name}: no date found in C2/D2 or P2/Q2")
+            if found and regs:
+                score = fleet_match(regs, f, found[0][1])
+                if score is not None and score < FLEET_MATCH_MIN:
+                    rejected.append(
+                        f"{f.name}: only {score:.0%} of its wagons are on the Leyland "
+                        f"master — this looks like another fleet (Lancashire is a "
+                        f"separate business). Not filled.")
+                    continue
             for d, col in found:
                 if d < floor or d > today:
                     fn = filename_date(f.name)
@@ -844,7 +877,7 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
             print(f"      from {m.get('from', '?')}  "
                   f"({len(m['files'])} attachment(s))")
 
-        days, rejected = collect_days(new)
+        days, rejected = collect_days(new, master_regs(MASTER_FILE))
         if rejected:
             print("\nset aside:")
             for r in rejected:
