@@ -38,7 +38,9 @@ GOLD = (0xF2 / 255, 0xB1 / 255, 0x36 / 255)
 MAROON = (0xA0 / 255, 0x36 / 255, 0x4A / 255)
 GREY = (0.42, 0.42, 0.45)
 HEX = {"navy": "#1A2646", "deep": "#0D1B36", "orange": "#E97A1F",
-       "gold": "#F2B136", "maroon": "#A0364A"}
+       "gold": "#F2B136", "maroon": "#A0364A",
+       "ebitda": "#F4A91D", "green": "#7FB13E"}
+ROLLING_YLIM = (60_000, 100_000)   # fixed band so the line has room to move
 GREEN_BG, RED_BG, AMBER_BG = (0.85, 0.93, 0.84), (0.97, 0.87, 0.87), (0.99, 0.93, 0.83)
 MODEL = "claude-sonnet-5"
 LOGO = HERE / "static" / "fox-group-logo.png"
@@ -102,19 +104,20 @@ def chart_total_earnings(m, days, title):
 
 
 def chart_ebitda(m, days, title):
+    """Three lines, not bars-plus-lines: earnings, EBITDA and profit share one axis
+    so the bottom-line measures read against revenue directly."""
     f, ax = _fig()
     x = range(len(days))
-    ax.bar(x, [m.val("total_earnings", d) or 0 for d in days],
-           color=HEX["navy"], width=0.62, label="Earnings")
-    ax.plot(x, [m.val("ebitda", d) or 0 for d in days], color=HEX["orange"],
-            marker="o", lw=2, label="EBITDA")
-    ax.plot(x, [m.val("profit", d) or 0 for d in days], color=HEX["maroon"],
-            marker="o", lw=2, label="Profit")
-    ax.axhline(0, color="#999999", lw=0.8)
+    ax.plot(x, [m.val("total_earnings", d) or 0 for d in days], color=HEX["navy"],
+            marker="o", ms=6, lw=2, label="Total earnings")
+    ax.plot(x, [m.val("ebitda", d) or 0 for d in days], color=HEX["ebitda"],
+            marker="s", ms=6, lw=2, label="Daily EBITDA")
+    ax.plot(x, [m.val("profit", d) or 0 for d in days], color=HEX["orange"],
+            marker="^", ms=6, lw=2, label="Profit")
     ax.set_xticks(x, _daylabels(days), fontsize=9)
     _gbp(ax)
     ax.set_ylabel("£")
-    ax.legend(frameon=False, fontsize=9, loc="center left", bbox_to_anchor=(1.01, 0.5))
+    ax.legend(frameon=False, fontsize=9, loc="lower left")
     ax.set_title(title, fontsize=13, fontweight="bold", color=HEX["navy"], loc="left")
     return _png(f)
 
@@ -123,8 +126,10 @@ def chart_rolling(m, days, title):
     f, ax = _fig()
     vals = [m.val("rolling_5day", d) for d in days]
     ax.plot(range(len(days)), vals, color=HEX["orange"], marker="o", lw=2.4)
-    ax.fill_between(range(len(days)), vals, color=HEX["orange"], alpha=0.12)
+    ax.fill_between(range(len(days)), vals, ROLLING_YLIM[0],
+                    color=HEX["orange"], alpha=0.12)
     ax.set_xticks(range(len(days)), _daylabels(days), fontsize=9)
+    ax.set_ylim(*ROLLING_YLIM)         # £60k–£100k, so movement is visible
     _gbp(ax)
     ax.set_ylabel("£")
     ax.set_title(title, fontsize=13, fontweight="bold", color=HEX["navy"], loc="left")
@@ -169,22 +174,26 @@ def chart_costs(m, days, title):
 
 
 def chart_under_target(m, day, title):
-    f, ax = _fig(9.4, 4.2)
-    names, unders, totals = [], [], []
+    """Horizontal stacked bar per category — on/above target in green, under in
+    orange, annotated 'u/t under', categories top-down in sheet order."""
+    f, ax = _fig(9.4, 4.4)
+    names, unders, ons = [], [], []
     for _l, first, last, disp, tgt in CATEGORIES:
-        ws = [w for w in m.wagons(day)
-              if w["category"] == disp and w["earned"]]
-        names.append(disp)
-        unders.append(sum(1 for w in ws if w["earned"] < w["target"]))
-        totals.append(len(ws))
-    x = range(len(names))
-    ax.bar(x, totals, color="#D9DCE3", width=0.6, label="In service")
-    ax.bar(x, unders, color=HEX["maroon"], width=0.6, label="Under target")
-    for i, (u, t) in enumerate(zip(unders, totals)):
-        ax.text(i, t + 0.4, f"{u}/{t}", ha="center", fontsize=9, color=HEX["navy"])
-    ax.set_xticks(x, names, fontsize=9)
-    ax.set_ylabel("wagons")
-    ax.legend(frameon=False, fontsize=9)
+        ws = [w for w in m.wagons(day) if w["category"] == disp and w["earned"]]
+        u = sum(1 for w in ws if w["earned"] < w["target"])
+        names.append(disp); unders.append(u); ons.append(len(ws) - u)
+    y = list(range(len(names)))[::-1]          # first category at the top
+    ax.barh(y, ons, color=HEX["green"], height=0.55, label="On / above target")
+    ax.barh(y, unders, left=ons, color=HEX["orange"], height=0.55, label="Under target")
+    for yy, o, u in zip(y, ons, unders):
+        ax.text(o + u + 0.6, yy, f"{u}/{o+u} under", va="center", fontsize=9,
+                color="#444444")
+    ax.set_yticks(y, names, fontsize=9)
+    ax.set_xlabel("Wagons in service")
+    ax.set_xlim(0, max(o + u for o, u in zip(ons, unders)) * 1.22)
+    ax.grid(axis="x", color="#DDDDDD", lw=0.7, ls=":")
+    ax.grid(axis="y", visible=False)
+    ax.legend(frameon=False, fontsize=9, loc="lower right")
     ax.set_title(title, fontsize=13, fontweight="bold", color=HEX["navy"], loc="left")
     return _png(f)
 
@@ -460,7 +469,7 @@ def build(master_path, out, focus=None, reports_dir=None, commentary=True):
                chart_total_earnings(m, days, "Total daily earnings"), notes["p2"])
     chart_page(c, day, 3, total, "Earnings, EBITDA and profit",
                "Daily revenue against bottom-line measures.",
-               chart_ebitda(m, days, "Earnings, EBITDA and profit"), notes["p3"])
+               chart_ebitda(m, days, "Earnings, EBITDA and profit — last 7 trading days"), notes["p3"])
     chart_page(c, day, 4, total, "Rolling 5-day average earnings",
                "Smoothed view of fleet-wide daily earnings momentum.",
                chart_rolling(m, days, "Rolling 5-day average earnings"), notes["p4"])
@@ -472,7 +481,7 @@ def build(master_path, out, focus=None, reports_dir=None, commentary=True):
                chart_costs(m, days, "Daily costings vs. earnings"), notes["p6"])
     chart_page(c, day, 7, total, f"Wagons under target on {day:%a %d %b %Y}",
                "Targets per category as set by the conditional formatting in the master sheet.",
-               chart_under_target(m, day, "Wagons under target by category"), notes["p7"])
+               chart_under_target(m, day, "Wagons under daily target"), notes["p7"])
     chart_page(c, day, 8, total, "Wagons off the road — by reason",
                "VOR = Vehicle Off Road, MN = maintenance, ND = no driver. Last 7 trading days.",
                chart_offroad(m, days, "Wagons off the road each day, by reason"), notes["p8"])
