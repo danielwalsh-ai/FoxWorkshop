@@ -212,31 +212,39 @@ def hook_fleet():
 def hook_split(report_date):
     """Per-registration hook spend for the month (area = HOOKS, top-sheet
     divisions only — mirrors exactly what feeds the HOOKS area row).
-    Returns (fleet_regs, per_reg, unmatched) where
-      per_reg   -> {reg: {report_date: £}}
-      unmatched -> {report_date: £}   (area HOOKS but no reg recorded)"""
+    Returns (fleet_regs, per_reg, unmatched, ytd) where
+      per_reg   -> {reg: {report_date: £}}   (current month)
+      unmatched -> {report_date: £}          (area HOOKS but no reg recorded)
+      ytd       -> {reg: £} + {'_UNMATCHED': £}  (from 1 Jan)"""
+    import datetime as _dt
     from collections import defaultdict
     from classify import TOP_SHEETS
     TOP = {s.strip() for s in TOP_SHEETS}
     fleet = hook_fleet()
     first, _ = _bounds(report_date.year, report_date.month)
+    jan1 = _dt.date(report_date.year, 1, 1)
     with get_conn() as c, c.cursor() as cur:
         cur.execute("""SELECT report_date, division, vehicle_reg, cost FROM transactions
                        WHERE report_date >= %s AND report_date <= %s AND area = 'HOOKS'""",
-                    (first, report_date))
+                    (jan1, report_date))
         rows = cur.fetchall()
     per_reg = defaultdict(lambda: defaultdict(float))
     unmatched = defaultdict(float)
+    ytd = defaultdict(float)
     for rd, division, reg, cost in rows:
         if (division or '').strip() not in TOP:
             continue
         cost = float(cost or 0)
         reg = (reg or '').strip().upper().replace(' ', '')
         if reg:
-            per_reg[reg][rd] += cost
+            ytd[reg] += cost
+            if rd >= first:
+                per_reg[reg][rd] += cost
         else:
-            unmatched[rd] += cost
-    return fleet, {k: dict(v) for k, v in per_reg.items()}, dict(unmatched)
+            ytd['_UNMATCHED'] += cost
+            if rd >= first:
+                unmatched[rd] += cost
+    return fleet, {k: dict(v) for k, v in per_reg.items()}, dict(unmatched), dict(ytd)
 
 
 FN_GROUPS = {'J FISHER': ('J FISHER', 'J Fisher Plant'),
@@ -256,17 +264,20 @@ def fisher_nms_split(report_date):
     from collections import defaultdict
     from classify import reg_year, extract_reg
     from parts_category import categorise
+    import datetime as _dt
     first, _ = _bounds(report_date.year, report_date.month)
+    jan1 = _dt.date(report_date.year, 1, 1)
     divs = tuple(d for pair in FN_GROUPS.values() for d in pair)
     with get_conn() as c, c.cursor() as cur:
         cur.execute("""SELECT report_date, division, vehicle_reg, part_name, cost
                        FROM transactions
                        WHERE report_date >= %s AND report_date <= %s
-                         AND division IN %s""", (first, report_date, divs))
+                         AND division IN %s""", (jan1, report_date, divs))
         rows = cur.fetchall()
     out = {g: {'mtd': defaultdict(lambda: defaultdict(float)),
                'today': defaultdict(lambda: defaultdict(float)),
-               'mtd_total': 0.0, 'today_total': 0.0} for g in FN_GROUPS}
+               'ytd': defaultdict(lambda: defaultdict(float)),
+               'mtd_total': 0.0, 'today_total': 0.0, 'ytd_total': 0.0} for g in FN_GROUPS}
     div_to_group = {d.strip(): g for g, pair in FN_GROUPS.items() for d in pair}
     for rd, division, reg, part, cost in rows:
         g = div_to_group.get((division or '').strip())
@@ -280,14 +291,44 @@ def fisher_nms_split(report_date):
             y = reg_year(reg)
             band = str(y) if y else 'Older / private plates'
         cat = categorise(part)
-        out[g]['mtd'][cat][band] += cost
-        out[g]['mtd_total'] += cost
+        out[g]['ytd'][cat][band] += cost
+        out[g]['ytd_total'] += cost
+        if rd >= first:
+            out[g]['mtd'][cat][band] += cost
+            out[g]['mtd_total'] += cost
         if rd == report_date:
             out[g]['today'][cat][band] += cost
             out[g]['today_total'] += cost
     for g in out:
         out[g]['mtd'] = {k: dict(v) for k, v in out[g]['mtd'].items()}
         out[g]['today'] = {k: dict(v) for k, v in out[g]['today'].items()}
+        out[g]['ytd'] = {k: dict(v) for k, v in out[g]['ytd'].items()}
         out[g]['mtd_total'] = round(out[g]['mtd_total'], 2)
         out[g]['today_total'] = round(out[g]['today_total'], 2)
+        out[g]['ytd_total'] = round(out[g]['ytd_total'], 2)
     return out
+
+
+def ytd_rollups(report_date):
+    """Year-to-date (from 1 Jan) spend by division and by area — top sheets.
+    Returns {'division': {name: £}, 'area': {name: £}}."""
+    import datetime as _dt
+    from collections import defaultdict
+    from classify import TOP_SHEETS
+    TOP = {s.strip() for s in TOP_SHEETS}
+    jan1 = _dt.date(report_date.year, 1, 1)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""SELECT division, area, cost FROM transactions
+                       WHERE report_date >= %s AND report_date <= %s""",
+                    (jan1, report_date))
+        rows = cur.fetchall()
+    div, area = defaultdict(float), defaultdict(float)
+    for d, a, cost in rows:
+        d = (d or '').strip()
+        if d not in TOP:
+            continue
+        cost = float(cost or 0)
+        div[d] += cost
+        if a:
+            area[a.strip()] += cost
+    return {'division': dict(div), 'area': dict(area)}
