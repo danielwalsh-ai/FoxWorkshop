@@ -99,17 +99,20 @@ def day_tab_rows(d):
 
 
 def reg_year_split(report_date):
-    """Vehicle spend by registration year — today + month-to-date.
-    Returns (today_by_year, mtd_by_year) dicts keyed by year int."""
+    """Vehicle spend by registration year — today + month-to-date + year-to-date
+    (YTD runs from 1 Jan of the report year; PF request 20/07/2026).
+    Returns (today_by_year, mtd_by_year, ytd_by_year) dicts keyed by year int."""
+    import datetime as _dt
     from collections import defaultdict
     from classify import reg_year, TOP_SHEETS
     TOP = {s.strip() for s in TOP_SHEETS}
     first, _ = _bounds(report_date.year, report_date.month)
+    jan1 = _dt.date(report_date.year, 1, 1)
     with get_conn() as c, c.cursor() as cur:
         cur.execute("""SELECT report_date, division, vehicle_reg, cost FROM transactions
-                       WHERE report_date >= %s AND report_date <= %s""", (first, report_date))
+                       WHERE report_date >= %s AND report_date <= %s""", (jan1, report_date))
         rows = cur.fetchall()
-    today, mtd = defaultdict(float), defaultdict(float)
+    today, mtd, ytd = defaultdict(float), defaultdict(float), defaultdict(float)
     for rd, division, reg, cost in rows:
         if (division or '').strip() not in TOP:
             continue
@@ -118,10 +121,12 @@ def reg_year_split(report_date):
             continue
         key = reg_year(reg) or 'other'   # 2021-2026 int, else 'other' (older/private)
         cost = float(cost or 0)
-        mtd[key] += cost
+        ytd[key] += cost
+        if rd >= first:
+            mtd[key] += cost
         if rd == report_date:
             today[key] += cost
-    return dict(today), dict(mtd)
+    return dict(today), dict(mtd), dict(ytd)
 
 
 def parts_category_split(report_date):
@@ -146,8 +151,11 @@ def parts_category_split(report_date):
         cur.execute("""SELECT report_date, vehicle_reg, part_name, cost
                        FROM transactions WHERE report_date <= %s""", (report_date,))
         rows = cur.fetchall()
+    import datetime as _dt
+    jan1 = _dt.date(report_date.year, 1, 1)
     ltd = {2025: defaultdict(float), 2026: defaultdict(float)}
     mtd = {2025: defaultdict(float), 2026: defaultdict(float)}
+    ytd = {2025: defaultdict(float), 2026: defaultdict(float)}
     tr_ltd = {2025: set(), 2026: set()}
     tr_mtd = {2025: set(), 2026: set()}
     for rd, reg, part, cost in rows:
@@ -161,10 +169,14 @@ def parts_category_split(report_date):
         cat = categorise(part)
         ltd[y][cat] += cost
         tr_ltd[y].add(reg)
+        if rd >= jan1:
+            ytd[y][cat] += cost
         if rd >= first:
             mtd[y][cat] += cost
             tr_mtd[y].add(reg)
     return {
+        'ytd': {y: dict(ytd[y]) for y in (2025, 2026)},
+        'total_ytd': {y: round(sum(ytd[y].values()), 2) for y in (2025, 2026)},
         'ltd': {y: dict(ltd[y]) for y in (2025, 2026)},
         'mtd': {y: dict(mtd[y]) for y in (2025, 2026)},
         'total_ltd': {y: round(sum(ltd[y].values()), 2) for y in (2025, 2026)},

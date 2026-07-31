@@ -96,20 +96,22 @@ def _write_parts_sheet(wb, parts, report_date_long):
         r = start_row
         ws.cell(r, 1, heading).font = bold
         r += 1
-        headers = ['Category', '2025 plate', '2026 plate', 'Total']
+        headers = ['Category', '2025 plate', '2026 plate', 'Total', 'YTD 2026']
         for ci, h in enumerate(headers, 1):
             cell = ws.cell(r, ci, h)
             cell.font = hdr_font; cell.fill = hdr_fill; cell.border = border
             cell.alignment = Alignment(horizontal='left' if ci == 1 else 'right')
         r += 1
         d25 = parts[scope_key][2025]; d26 = parts[scope_key][2026]
+        y25 = parts.get('ytd', {}).get(2025, {}); y26 = parts.get('ytd', {}).get(2026, {})
         rowi = 0
         for cat in CATEGORIES:
             v25 = round(d25.get(cat, 0.0), 2); v26 = round(d26.get(cat, 0.0), 2)
             if not v25 and not v26:
                 continue
             fill = PatternFill('solid', fgColor=LIGHT) if rowi % 2 == 0 else None
-            vals = [cat, v25, v26, round(v25 + v26, 2)]
+            ycat = round(y25.get(cat, 0.0) + y26.get(cat, 0.0), 2)
+            vals = [cat, v25, v26, round(v25 + v26, 2), ycat]
             for ci, v in enumerate(vals, 1):
                 cell = ws.cell(r, ci, v)
                 cell.border = border
@@ -120,7 +122,9 @@ def _write_parts_sheet(wb, parts, report_date_long):
             r += 1; rowi += 1
         # total row
         t25 = parts[tot_key][2025]; t26 = parts[tot_key][2026]
-        totrow = ['TOTAL', t25, t26, round(t25 + t26, 2)]
+        ytot = round(parts.get('total_ytd', {}).get(2025, 0.0)
+                     + parts.get('total_ytd', {}).get(2026, 0.0), 2)
+        totrow = ['TOTAL', t25, t26, round(t25 + t26, 2), ytot]
         for ci, v in enumerate(totrow, 1):
             cell = ws.cell(r, ci, v)
             cell.font = bold; cell.border = border
@@ -137,7 +141,7 @@ def _write_parts_sheet(wb, parts, report_date_long):
     section(nxt, 'mtd', 'total_mtd', 'trucks_mtd', f'This month so far ({report_date_long})')
 
     ws.column_dimensions['A'].width = 32
-    for col in ('B', 'C', 'D'):
+    for col in ('B', 'C', 'D', 'E'):
         ws.column_dimensions[col].width = 15
 
 
@@ -431,6 +435,7 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
         cover.cell(rn, MTD_COL, round(sum(gcv(rn, c) for c in range(2, today_col + 1)), 2))
 
     # ── Spend by Registration Year block (2021-2026, rows 71-78) ──
+    _, _, year_ytd_cover = queries.reg_year_split(report_date)
     cover.cell(71, 1, 'SPEND BY REGISTRATION YEAR')
     for yr, r in YEAR_ROWS:
         cover.cell(r, 1, str(yr))
@@ -441,6 +446,17 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     for col in range(2, today_col + 1):
         cover.cell(YEAR_TOTAL_ROW, col, round(sum(gcv(r, col) for r in all_year_rows), 2))
     cover.cell(YEAR_TOTAL_ROW, MTD_COL, get_mtd(YEAR_TOTAL_ROW))
+    # YTD 2026 column (PF 20/07): plain values in col 39, outside all formula ranges
+    YTD_COL = 39
+    cover.cell(71, YTD_COL, 'YTD 2026')
+    _ytd_map = dict(zip((yr for yr, _ in YEAR_ROWS), (r for _, r in YEAR_ROWS)))
+    ytd_total = 0.0
+    for yr, r in YEAR_ROWS:
+        v = round(float(year_ytd_cover.get(yr, 0.0)), 2)
+        cover.cell(r, YTD_COL, v); ytd_total += v
+    v_other = round(float(year_ytd_cover.get('other', 0.0)), 2)
+    cover.cell(OTHER_ROW, YTD_COL, v_other); ytd_total += v_other
+    cover.cell(YEAR_TOTAL_ROW, YTD_COL, round(ytd_total, 2))
 
     # ── Hook Fleet — spend by registration (PF request; rows 81+) ──
     HOOK_HDR = 81
@@ -544,11 +560,11 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     print(f"Balance: top £{top:,.2f}  bottom £{bot:,.2f}  "
           f"{'BALANCED' if diff < 0.01 else f'GAP £{diff:,.2f}'}")
 
-    year_today, year_mtd = queries.reg_year_split(report_date)
+    year_today, year_mtd, year_ytd = queries.reg_year_split(report_date)
     hook_pdf = (hook_regs, per_reg, unmatched)
     _build_pdf(out_pdf, cover2, g2, report_date, report_date_long,
                today_col, days_elapsed, days_remaining, wd, year_today, year_mtd, parts,
-               fn=fn, hooks=hook_pdf)
+               fn=fn, hooks=hook_pdf, year_ytd=year_ytd)
     print(f"Saved: {out_xlsx.name}")
     print(f"Saved: {out_pdf.name}")
     return out_xlsx, out_pdf, diff, top, report_date_long
@@ -557,7 +573,7 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
 # ── PDF (ported from original, budgets read from sheet) ─────────────
 def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
                DAYS_ELAPSED, DAYS_REMAINING, WD, year_today=None, year_mtd=None,
-               parts=None, fn=None, hooks=None):
+               parts=None, fn=None, hooks=None, year_ytd=None):
     NAVY = colors.HexColor('#24214a'); ORANGE = colors.HexColor('#eb941f')
     BLUE = colors.HexColor('#00579e'); WHITE = colors.white
     LIGHT = colors.HexColor('#F2F3F7'); GREY = colors.HexColor('#666666')
@@ -714,19 +730,22 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     sec_lbl(y, 'Spend by Registration Year (vehicle spend)'); y -= LH + G
     yt = year_today or {}
     ym = year_mtd or {}
-    yr_data = [['Registration Year', "Today's Spend", 'Month-to-Date']]
-    tot_t = tot_m = 0.0
+    yy = year_ytd or {}
+    yr_data = [['Registration Year', "Today's Spend", 'Month-to-Date', 'YTD 2026']]
+    tot_t = tot_m = tot_y = 0.0
     for yr in (2021, 2022, 2023, 2024, 2025, 2026):
-        t = yt.get(yr, 0.0); mt = ym.get(yr, 0.0)
-        yr_data.append([str(yr), fmt(t), fmt(mt)]); tot_t += t; tot_m += mt
-    ot = yt.get('other', 0.0); om = ym.get('other', 0.0)
-    yr_data.append(['Older / private plates', fmt(ot), fmt(om)]); tot_t += ot; tot_m += om
-    yr_data.append(['Total (all vehicle spend)', fmt(tot_t), fmt(tot_m)])
+        t = yt.get(yr, 0.0); mt = ym.get(yr, 0.0); yv = yy.get(yr, 0.0)
+        yr_data.append([str(yr), fmt(t), fmt(mt), fmt(yv)])
+        tot_t += t; tot_m += mt; tot_y += yv
+    ot = yt.get('other', 0.0); om = ym.get('other', 0.0); oy = yy.get('other', 0.0)
+    yr_data.append(['Older / private plates', fmt(ot), fmt(om), fmt(oy)])
+    tot_t += ot; tot_m += om; tot_y += oy
+    yr_data.append(['Total (all vehicle spend)', fmt(tot_t), fmt(tot_m), fmt(tot_y)])
     n_yr = len(yr_data)
     yr_sty = base_tbl() + [('BACKGROUND', (0, n_yr - 1), (-1, n_yr - 1), colors.HexColor('#E0E3EE')),
                            ('FONTNAME', (0, n_yr - 1), (-1, n_yr - 1), 'Helvetica-Bold'),
                            ('LINEABOVE', (0, n_yr - 1), (-1, n_yr - 1), 0.5, NAVY)]
-    yr_tbl = Table(yr_data, colWidths=[70 * mm, 58 * mm, 58 * mm], rowHeights=RH_B)
+    yr_tbl = Table(yr_data, colWidths=[62 * mm, 41 * mm, 41 * mm, 42 * mm], rowHeights=RH_B)
     yr_tbl.setStyle(TableStyle(yr_sty)); yr_tbl.wrapOn(cv, W, H)
     yr_tbl.drawOn(cv, M, y - n_yr * RH_B)
 
@@ -745,20 +764,23 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     y -= NOTE_H + G
 
     d25 = p['ltd'][2025]; d26 = p['ltd'][2026]
-    pc_data = [['Category', '2025 plate', '2026 plate', 'Total']]
+    py25 = p.get('ytd', {}).get(2025, {}); py26 = p.get('ytd', {}).get(2026, {})
+    pc_data = [['Category', '2025 plate', '2026 plate', 'Total', 'YTD 2026']]
     for cat in CATEGORIES:
         v25 = d25.get(cat, 0.0); v26 = d26.get(cat, 0.0)
         if not v25 and not v26:
             continue
-        pc_data.append([cat, fmt(v25), fmt(v26), fmt(v25 + v26)])
+        pc_data.append([cat, fmt(v25), fmt(v26), fmt(v25 + v26),
+                        fmt(py25.get(cat, 0.0) + py26.get(cat, 0.0))])
     t25 = p['total_ltd'][2025]; t26 = p['total_ltd'][2026]
-    pc_data.append(['TOTAL', fmt(t25), fmt(t26), fmt(t25 + t26)])
+    ty = p.get('total_ytd', {}).get(2025, 0.0) + p.get('total_ytd', {}).get(2026, 0.0)
+    pc_data.append(['TOTAL', fmt(t25), fmt(t26), fmt(t25 + t26), fmt(ty)])
     n_pc = len(pc_data)
     pc_sty = base_tbl() + [('BACKGROUND', (0, n_pc - 1), (-1, n_pc - 1), colors.HexColor('#E0E3EE')),
                            ('FONTNAME', (0, n_pc - 1), (-1, n_pc - 1), 'Helvetica-Bold'),
                            ('LINEABOVE', (0, n_pc - 1), (-1, n_pc - 1), 0.5, NAVY),
                            ('TOPPADDING', (0, 0), (-1, -1), 2.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5)]
-    pc_tbl = Table(pc_data, colWidths=[66 * mm, 40 * mm, 40 * mm, 40 * mm], rowHeights=RH_B)
+    pc_tbl = Table(pc_data, colWidths=[58 * mm, 32 * mm, 32 * mm, 32 * mm, 32 * mm], rowHeights=RH_B)
     pc_tbl.setStyle(TableStyle(pc_sty)); pc_tbl.wrapOn(cv, W, H)
     pc_tbl.drawOn(cv, M, y - n_pc * RH_B)
     y -= n_pc * RH_B + G + 4 * mm
