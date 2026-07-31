@@ -53,7 +53,7 @@ def run(report_date: dt.date, send=True):
         print(f"!! Balance gap £{diff:,.2f} — NOT emailing. Investigate first.")
         return 1
     if send:
-        send_report(out_pdf, out_xlsx, date_long, f"Today's total spend: £{daily_total:,.2f}")
+        send_report(out_pdf, out_xlsx, date_long, f"Today's total spend: £{daily_total:,.2f}", to_me=to_me)
     else:
         print(f"[DRY RUN] would email — today's total £{daily_total:,.2f}")
     return 0
@@ -63,6 +63,7 @@ def main():
     argv = sys.argv[1:]
     scheduled = "--scheduled" in argv          # used by the Coolify cron
     send = "--no-email" not in argv
+    to_me = "--to-me" in argv                  # full real send, but only to Daniel
     dates = [a for a in argv if not a.startswith("--")]
 
     if scheduled:
@@ -78,7 +79,7 @@ def main():
     else:
         report_date = pick_report_date(dt.date.today())
 
-    sys.exit(run(report_date, send=send))
+    sys.exit(run(report_date, send=send, to_me=to_me))
 
 
 if __name__ == "__main__":

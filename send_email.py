@@ -38,7 +38,7 @@ def _attach(path):
     return {"filename": Path(path).name, "content": base64.b64encode(data).decode()}
 
 
-def send_report(pdf_path, xlsx_path, report_date_long, headline=""):
+def send_report(pdf_path, xlsx_path, report_date_long, headline="", to_me=False):
     env = load_env()
     api_key = env.get("RESEND_API_KEY", "")
     sender = env.get("EMAIL_FROM", "")
@@ -53,6 +53,8 @@ def send_report(pdf_path, xlsx_path, report_date_long, headline=""):
         sender = GOOD
     recipients = [e.strip() for e in env.get("EMAIL_TO", "").split(",") if e.strip()]
     recipients = [GOOD if r.lower() == DEAD else r for r in recipients]
+    if to_me:
+        recipients = [GOOD]
     seen = set()
     recipients = [r for r in recipients if not (r.lower() in seen or seen.add(r.lower()))]
     reply_to = env.get("EMAIL_REPLY_TO", GOOD)
