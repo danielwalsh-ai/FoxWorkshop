@@ -231,13 +231,58 @@ def notify(subject, body, dry_run=False):
         s.send_message(m)
 
 
+def last_pack_sent():
+    """When we last sent a pack, taken from Gmail rather than local state.
+
+    The container has no persistent volume, so state/ is wiped on every redeploy.
+    Without this a fresh container would treat Mel's latest as unseen and send the
+    pack to the whole Lancashire list a second time."""
+    M = _connect()
+    try:
+        M.select('"[Gmail]/All Mail"')
+        since = (dt.date.today() - dt.timedelta(days=30)).strftime("%d-%b-%Y")
+        typ, data = M.search(
+            None, f'(SINCE "{since}" FROM "{ENV["GMAIL_USER"]}" '
+                  f'SUBJECT "Daily Wagon Earnings Pack")')
+        newest = None
+        for uid in data[0].split():
+            typ, md = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (DATE SUBJECT)])")
+            if not md or not md[0]:
+                continue
+            h = email.message_from_bytes(md[0][1])
+            subj = str(email.header.make_header(
+                email.header.decode_header(h.get("Subject", ""))))
+            if subj.strip().startswith("[TEST"):        # --to-me runs don't count
+                continue
+            raw = h.get("Date")
+            if raw:
+                d = email.utils.parsedate_to_datetime(raw)
+                newest = d if newest is None or d > newest else newest
+        return newest
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
 def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False):
     state = load_state()
     done = set(state["processed_message_ids"])
+    if not force and not state["processed_message_ids"]:
+        mark = last_pack_sent()
+        if mark:
+            state["watermark"] = mark.isoformat()
+            save_state(state)
+            print(f"No local state — last pack we sent was {mark:%Y-%m-%d %H:%M}; "
+                  f"only newer mail from Mel will be acted on.")
+    wm = state.get("watermark")
+    wm = dt.datetime.fromisoformat(wm) if wm else None
     with tempfile.TemporaryDirectory() as tmp:
         new, heads = fetch_mel(tmp, since_days,
                                wanted=(lambda h: True) if force
-                               else (lambda h: h["id"] not in done))
+                               else (lambda h: h["id"] not in done
+                                     and (wm is None or h["date"] > wm)))
         if not new:
             print(f"Nothing new from Mel ({len(heads)} email(s) checked).")
             return 0
