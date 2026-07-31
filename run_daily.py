@@ -30,7 +30,7 @@ def pick_report_date(today: dt.date) -> dt.date:
     return today
 
 
-def run(report_date: dt.date, send=True):
+def run(report_date: dt.date, send=True, to_me=False):
     print(f"=== Daily run: reporting on {report_date} ({report_date:%A})"
           f"{'' if send else '  [DRY RUN - no email]'} ===")
 
