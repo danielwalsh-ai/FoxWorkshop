@@ -241,7 +241,7 @@ def _style_workbook(wb, today_col, hook_hdr, hook_total_row):
     navy_top = Border(left=thin, right=thin, bottom=thin,
                       top=Side(style='medium', color=NAVY))
     money = '£#,##0.00'
-    MAXC = 33
+    MAXC = 34
 
     cover = wb['Cover']
     # header row 2: navy band with white day labels
@@ -250,7 +250,8 @@ def _style_workbook(wb, today_col, hook_hdr, hook_total_row):
         cell = cover.cell(2, col)
         cell.fill = navy_fill; cell.font = white_bold
         cell.alignment = Alignment(horizontal='center')
-    cover.cell(2, MAXC, 'MTD')
+    cover.cell(2, 33, 'MTD')
+    cover.cell(2, 34, 'YTD 2026')
 
     def band(rows, fill=None, font=None, border=box, fmt=True):
         for r in rows:
@@ -452,17 +453,6 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     for col in range(2, today_col + 1):
         cover.cell(YEAR_TOTAL_ROW, col, round(sum(gcv(r, col) for r in all_year_rows), 2))
     cover.cell(YEAR_TOTAL_ROW, MTD_COL, get_mtd(YEAR_TOTAL_ROW))
-    # YTD 2026 column (PF 20/07): plain values in col 39, outside all formula ranges
-    YTD_COL = 39
-    cover.cell(71, YTD_COL, 'YTD 2026')
-    _ytd_map = dict(zip((yr for yr, _ in YEAR_ROWS), (r for _, r in YEAR_ROWS)))
-    ytd_total = 0.0
-    for yr, r in YEAR_ROWS:
-        v = round(float(year_ytd_cover.get(yr, 0.0)), 2)
-        cover.cell(r, YTD_COL, v); ytd_total += v
-    v_other = round(float(year_ytd_cover.get('other', 0.0)), 2)
-    cover.cell(OTHER_ROW, YTD_COL, v_other); ytd_total += v_other
-    cover.cell(YEAR_TOTAL_ROW, YTD_COL, round(ytd_total, 2))
 
     # ── Hook Fleet — spend by registration (PF request; rows 81+) ──
     HOOK_HDR = 81
@@ -504,6 +494,32 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
     cover.cell(HOOK_TOTAL_ROW, MTD_COL,
                round(sum(float(cover.cell(r, MTD_COL).value or 0)
                          for r in range(HOOK_HDR + 1, HOOK_TOTAL_ROW)), 2))
+
+    # ── YTD 2026 column (col 34, beside MTD; plain values, no formulas touch it) ──
+    YTD_COL = 34
+    _rollups = queries.ytd_rollups(report_date)
+    _div_y = _rollups.get('division', {})
+    _area_y = _rollups.get('area', {})
+    for name, rn in COVER_TOP_ROW.items():
+        cover.cell(rn, YTD_COL, round(float(_div_y.get(name, 0.0)), 2))
+    cover.cell(37, YTD_COL, round(sum(float(v) for v in _div_y.values()), 2))
+    for aname, arow in COVER_BOTTOM_ROW.items():
+        cover.cell(arow, YTD_COL, round(float(_area_y.get(aname, 0.0)), 2))
+    cover.cell(BOT_TOTAL_ROW, YTD_COL, round(sum(float(v) for v in _area_y.values()), 2))
+    _yr_tot = 0.0
+    for yr, rn in YEAR_ROWS:
+        v = round(float(year_ytd_cover.get(yr, 0.0)), 2)
+        cover.cell(rn, YTD_COL, v); _yr_tot += v
+    v_other = round(float(year_ytd_cover.get('other', 0.0)), 2)
+    cover.cell(OTHER_ROW, YTD_COL, v_other)
+    cover.cell(YEAR_TOTAL_ROW, YTD_COL, round(_yr_tot + v_other, 2))
+    _hk_tot = 0.0
+    for reg, hrow in zip(hook_regs, range(HOOK_HDR + 1, HOOK_HDR + 1 + len(hook_regs))):
+        v = round(float(hook_ytd.get(reg, 0.0)), 2)
+        cover.cell(hrow, YTD_COL, v); _hk_tot += v
+    v_unm = round(float(hook_ytd.get('_UNMATCHED', 0.0)), 2)
+    cover.cell(UNM_ROW, YTD_COL, v_unm)
+    cover.cell(HOOK_TOTAL_ROW, YTD_COL, round(_hk_tot + v_unm, 2))
 
     # write the day's transactions into the division tabs
     tabmap = {s.strip(): s for s in wb.sheetnames}
@@ -567,7 +583,7 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
           f"{'BALANCED' if diff < 0.01 else f'GAP £{diff:,.2f}'}")
 
     year_today, year_mtd, year_ytd = queries.reg_year_split(report_date)
-    rollups = queries.ytd_rollups(report_date)
+    rollups = _rollups
     hook_pdf = (hook_regs, per_reg, unmatched, hook_ytd)
     _build_pdf(out_pdf, cover2, g2, report_date, report_date_long,
                today_col, days_elapsed, days_remaining, wd, year_today, year_mtd, parts,
