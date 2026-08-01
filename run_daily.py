@@ -54,6 +54,15 @@ def run(report_date: dt.date, send=True, to_me=False):
         return 1
     if send:
         send_report(out_pdf, out_xlsx, date_long, f"Today's total spend: £{daily_total:,.2f}", to_me=to_me)
+        # nightly line review — never blocks or fails the report itself
+        try:
+            from line_review import review, send_review_email
+            from send_email import load_env
+            _env = load_env()
+            _n, _findings = review(report_date, _env)
+            send_review_email(date_long, _n, _findings, _env)
+        except Exception as _e:
+            print(f"line review skipped: {_e}")
     else:
         print(f"[DRY RUN] would email — today's total £{daily_total:,.2f}")
     return 0

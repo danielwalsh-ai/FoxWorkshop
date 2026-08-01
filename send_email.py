@@ -107,6 +107,28 @@ def send_report(pdf_path, xlsx_path, report_date_long, headline="", to_me=False)
         raise RuntimeError(f"Resend API error {e.code}: {detail}") from None
 
 
+def _resend_send(env, subject, html, to, attachments=None):
+    """Generic Resend send used by auxiliary emails (line review etc.)."""
+    api_key = env.get("RESEND_API_KEY", "")
+    sender = env.get("EMAIL_FROM", "") or "daniel.walsh@kfltd.uk"
+    import re as _re
+    sender = _re.sub(_re.escape("danielwalsh@kfltd.uk"), "daniel.walsh@kfltd.uk",
+                     sender, flags=_re.IGNORECASE)
+    payload = {"from": sender, "to": to, "subject": subject, "html": html,
+               "reply_to": "daniel.walsh@kfltd.uk"}
+    if attachments:
+        payload["attachments"] = attachments
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {api_key}",
+                 "Content-Type": "application/json",
+                 "User-Agent": "fox-report/1.0 (+automation)"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read().decode()
+
+
 def main():
     if len(sys.argv) < 4:
         print("Usage: python send_email.py <pdf> <xlsx> <report_date_long> [headline]")
