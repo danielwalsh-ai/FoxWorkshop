@@ -72,6 +72,8 @@ def get_area(row, reg_to_area):
         ru = ref.upper()
         if 'ASPHALT PLANT' in ru:
             return 'PLANT'
+        if 'CRUSHER' in ru or 'SCREENER' in ru:
+            return 'PLANT'
         if ru.strip() == 'PLANT':
             return 'PLANT'
         if 'WASTE TYRE' in ru:
@@ -100,7 +102,7 @@ def classify(row):
     PLANT_F = ['WIRTGEN', 'FLUID POWER', 'REDGOLD', 'LVS IMAS', 'COUNTY CONVEYORS', 'HARPSCREEN',
                'EXCAVATOR SPARES', 'BANNER EQUIPMENT', 'DANLINE', 'ASTRAK', 'SWAN COMMERCIALS']
     PLANT_R = ['PLANER', 'PLANERS', 'PLANT', 'HYDRAULIC OIL', 'WORKSHOP - HYD OIL', 'RAM RESEAL',
-               'HYUNDAI', 'HYUNADAI', 'LOADING SHOVEL', 'SHOVEL',
+               'HYUNDAI', 'HYUNADAI', 'LOADING SHOVEL', 'SHOVEL', 'CRUSHER', 'SCREENER',
                'KING 22', 'KIN 10', 'CARRINGTON', 'STOCK - HYDRAULIC', 'TEREX', 'RETRO KIT FOR PLANER']
     TYRE_S = {'JB 4 TYRES', 'DMH TYRES', 'GT TYRES', 'TOMLINSON ROAD TYRES', 'PETERBOROUGH TYRE',
               'SOLIDEAL', 'A L TYRES', 'AJ TYRES', 'MICK BUTLER', 'ABCO TYRES', 'CHANTERS', 'ASHTON TYRE'}
@@ -144,7 +146,8 @@ def classify(row):
             return 'Tyres'
         return 'NMS CIVIL'
     # Hyundai / loading-shovel kit outside J Fisher (e.g. Leyland) -> general Plant tab
-    if any(k in ref_u for k in ['HYUNDAI', 'HYUNADAI', 'LOADING SHOVEL', 'SHOVEL']):
+    if any(k in ref_u for k in ['HYUNDAI', 'HYUNADAI', 'LOADING SHOVEL', 'SHOVEL',
+                                'CRUSHER', 'SCREENER']):
         return 'Plant'
     if sup_u in TYRE_S or 'TYRE' in part_u:
         return 'Tyres'
