@@ -119,13 +119,22 @@ def build_cover_workbook(months, data, out_path, chart_rows=None):
     # One chart per highlighted row, stacked down the sheet. They can't share an
     # axis: the 44 rows span single-figure wagon counts to £1.9m a month, so on one
     # chart everything but the money is a flat line.
-    cats = Reference(ws, min_col=2, max_col=1 + len(months), min_row=hdr)
     wanted = list(chart_rows if chart_rows is not None
                   else range(hdr + 1, last_row + 1))
     anchor = last_row + 3
     STEP = 16                       # rows per chart block
+    skipped = []
     for rr in wanted:
         label = str(ws.cell(rr, 1).value)
+        # Several rows only start part-way through — the category TOTAL EARNINGS
+        # rows don't begin until 2026 — so each chart starts at its own first
+        # populated month rather than carrying a run of empty columns.
+        filled = [j for j in range(len(months))
+                  if ws.cell(rr, 2 + j).value is not None]
+        if not filled:
+            skipped.append(label)
+            continue
+        c0, c1 = 2 + filled[0], 2 + filled[-1]
         ch = BarChart()
         ch.type = "col"
         ch.grouping = "clustered"
@@ -134,13 +143,15 @@ def build_cover_workbook(months, data, out_path, chart_rows=None):
         ch.x_axis.title = None
         ch.height, ch.width = 7.5, 30
         ch.legend = None
-        s = Series(Reference(ws, min_col=2, max_col=1 + len(months), min_row=rr),
+        s = Series(Reference(ws, min_col=c0, max_col=c1, min_row=rr),
                    title_from_data=False, title=label)
         s.trendline = Trendline(trendlineType="linear")
         ch.series.append(s)
-        ch.set_categories(cats)
+        ch.set_categories(Reference(ws, min_col=c0, max_col=c1, min_row=hdr))
         ws.add_chart(ch, f"A{anchor}")
         anchor += STEP
+    if skipped:
+        print(f"  no data, no chart: {', '.join(skipped)}")
 
     # Open on the most recent month: freeze the metric column and header, then
     # scroll the data pane to the right-hand end.
