@@ -21,6 +21,8 @@ HIGHLIGHT = "FF0070C0"          # the dark blue Paul used
 START = dt.date(2025, 1, 1)
 DATE_ROW, FIRST_DATA_COL = 1, 4
 SHEET_NAME = "COVER"
+FOX_NAVY = "1A2646"      # Fox Group navy, sampled from the pack
+TREND_RED = "C00000"      # trend line
 
 # Rows that are a rate rather than a running total have to be averaged over the
 # month, not summed.
@@ -77,43 +79,67 @@ def monthly(path, rows, start=START, sheet="DAILY"):
 def build_cover_workbook(months, data, out_path, chart_rows=None):
     """A standalone workbook holding just the cover sheet + its native chart."""
     from openpyxl.chart import BarChart, Reference, Series
+    from openpyxl.chart.axis import ChartLines
     from openpyxl.chart.trendline import Trendline
-    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.chart.shapes import GraphicalProperties
+    from openpyxl.chart.text import RichText
+    from openpyxl.drawing.line import LineProperties
+    from openpyxl.drawing.text import (Paragraph, ParagraphProperties,
+                                       CharacterProperties)
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = SHEET_NAME
 
-    navy = "FF1A2646"
-    ws["A1"] = "Fox Brothers (Lancashire) — monthly summary"
-    ws["A1"].font = Font(size=15, bold=True, color=navy)
-    ws["A2"] = (f"Rows selected by Paul Fox, aggregated by month from "
-                f"{min(months):%B %Y}. Totals are summed; averages and wagon "
-                f"counts are averaged.")
-    ws["A2"].font = Font(size=9, italic=True, color="FF666666")
+    navy = "FF" + FOX_NAVY
+    ws.sheet_view.showGridLines = False          # cleaner behind the charts
+    ws["A1"] = "Fox Brothers (Lancashire)"
+    ws["A1"].font = Font(name="Calibri", size=20, bold=True, color=navy)
+    ws["A2"] = "Monthly summary"
+    ws["A2"].font = Font(name="Calibri", size=13, color=navy)
+    ws["A3"] = (f"Rows selected by Paul Fox, by month from {min(months):%B %Y}. "
+                f"Totals summed; averages and wagon counts averaged.")
+    ws["A3"].font = Font(name="Calibri", size=9, italic=True, color="FF7F7F7F")
+    ws.row_dimensions[1].height = 26
+    ws.row_dimensions[2].height = 18
 
-    hdr = 4
-    ws.cell(hdr, 1, "Metric").font = Font(bold=True, color="FFFFFFFF")
-    ws.cell(hdr, 1).fill = PatternFill("solid", fgColor=navy)
+    hdr = 5
+    thin = Side(style="thin", color="FFD9D9D9")
+    edge = Border(bottom=thin)
+    hc = ws.cell(hdr, 1, "Metric")
+    hc.font = Font(name="Calibri", size=10, bold=True, color="FFFFFFFF")
+    hc.fill = PatternFill("solid", fgColor=navy)
+    hc.alignment = Alignment(vertical="center")
     for j, mth in enumerate(months):
         c = ws.cell(hdr, 2 + j, dt.datetime(mth.year, mth.month, 1))
         c.number_format = "mmm yy"
-        c.font = Font(bold=True, color="FFFFFFFF")
+        c.font = Font(name="Calibri", size=10, bold=True, color="FFFFFFFF")
         c.fill = PatternFill("solid", fgColor=navy)
-        c.alignment = Alignment(horizontal="center")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[hdr].height = 20
 
+    band = PatternFill("solid", fgColor="FFF4F6F9")
     for i, ((r, lab), series) in enumerate(data.items()):
         rr = hdr + 1 + i
-        ws.cell(rr, 1, lab).font = Font(bold=True, size=9)
+        nc = ws.cell(rr, 1, lab)
+        nc.font = Font(name="Calibri", size=9.5, bold=True, color="FF262626")
+        nc.border = edge
         for j, mth in enumerate(months):
             cell = ws.cell(rr, 2 + j, series.get(mth))
-            cell.number_format = "#,##0"
+            cell.number_format = "#,##0;-#,##0;\"–\""
+            cell.font = Font(name="Calibri", size=9.5, color="FF262626")
+            cell.alignment = Alignment(horizontal="right")
+            cell.border = edge
+        if i % 2:                                # subtle banding, easier to read across
+            for j in range(len(months) + 1):
+                ws.cell(rr, 1 + j).fill = band
     last_row = hdr + len(data)
 
-    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["A"].width = 32
     for j in range(len(months)):
-        ws.column_dimensions[get_column_letter(2 + j)].width = 11
+        ws.column_dimensions[get_column_letter(2 + j)].width = 10.5
     ws.freeze_panes = ws.cell(hdr + 1, 2)
 
     # One chart per highlighted row, stacked down the sheet. They can't share an
@@ -141,13 +167,36 @@ def build_cover_workbook(months, data, out_path, chart_rows=None):
         ch.title = label
         ch.y_axis.title = None
         ch.x_axis.title = None
-        ch.height, ch.width = 7.5, 30
+        ch.height, ch.width = 7.0, 26
         ch.legend = None
+        ch.gapWidth = 55                       # chunkier bars, less white space
+        ch.overlap = -10
+
         s = Series(Reference(ws, min_col=c0, max_col=c1, min_row=rr),
                    title_from_data=False, title=label)
+        # every bar the same Fox navy, no outline
+        s.graphicalProperties = GraphicalProperties(solidFill=FOX_NAVY)
+        s.graphicalProperties.line.noFill = True
         s.trendline = Trendline(trendlineType="linear")
+        s.trendline.graphicalProperties = GraphicalProperties()
+        s.trendline.graphicalProperties.line = LineProperties(solidFill=TREND_RED, w=22000)
         ch.series.append(s)
         ch.set_categories(Reference(ws, min_col=c0, max_col=c1, min_row=hdr))
+
+        # quiet axes: thin grey gridlines, no clutter
+        ch.y_axis.majorGridlines = ChartLines(
+            spPr=GraphicalProperties(ln=LineProperties(solidFill="D9D9D9", w=6000)))
+        ch.x_axis.majorGridlines = None
+        ch.y_axis.numFmt = "#,##0"
+        for ax in (ch.x_axis, ch.y_axis):
+            ax.majorTickMark = "none"
+            ax.minorTickMark = "none"
+            ax.spPr = GraphicalProperties(ln=LineProperties(solidFill="BFBFBF", w=6000))
+            ax.txPr = RichText(
+                p=[Paragraph(pPr=ParagraphProperties(
+                    defRPr=CharacterProperties(sz=800, solidFill="595959")), endParaRPr=None)])
+        ch.x_axis.delete = False
+        ch.y_axis.delete = False
         ws.add_chart(ch, f"A{anchor}")
         anchor += STEP
     if skipped:
