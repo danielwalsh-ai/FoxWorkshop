@@ -140,7 +140,9 @@ def build_cover_workbook(months, data, out_path, chart_rows=None):
     ws.column_dimensions["A"].width = 32
     for j in range(len(months)):
         ws.column_dimensions[get_column_letter(2 + j)].width = 10.5
-    ws.freeze_panes = ws.cell(hdr + 1, 2)
+    # No frozen panes. A frozen column A clips any chart anchored there — you'd
+    # have to widen the column to see it — and a frozen header row leaves month
+    # headings floating over empty space once you scroll past the table.
 
     # One chart per highlighted row, stacked down the sheet. They can't share an
     # axis: the 44 rows span single-figure wagon counts to £1.9m a month, so on one
@@ -202,15 +204,12 @@ def build_cover_workbook(months, data, out_path, chart_rows=None):
     if skipped:
         print(f"  no data, no chart: {', '.join(skipped)}")
 
-    # Open on the most recent month: freeze the metric column and header, then
-    # scroll the data pane to the right-hand end.
+    # Land on the latest month without freezing anything: just park the cursor
+    # there so Excel scrolls it into view, and leave the charts unclipped.
     last_col = get_column_letter(1 + len(months))
-    ws.freeze_panes = ws.cell(hdr + 1, 2)
     try:
-        first_visible = get_column_letter(max(2, 1 + len(months) - 5))
-        ws.sheet_view.pane.topLeftCell = f"{first_visible}{hdr + 1}"
-        ws.sheet_view.selection[-1].activeCell = f"{last_col}{hdr + 1}"
-        ws.sheet_view.selection[-1].sqref = f"{last_col}{hdr + 1}"
+        ws.sheet_view.selection[0].activeCell = f"{last_col}{hdr + 1}"
+        ws.sheet_view.selection[0].sqref = f"{last_col}{hdr + 1}"
     except Exception:
         pass
 
