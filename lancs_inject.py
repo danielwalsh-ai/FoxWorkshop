@@ -132,10 +132,20 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
         new_parts[draw_dst] = zc.read(draw_src)
         rels_src = f"xl/drawings/_rels/{Path(draw_src).name}.rels"
         if rels_src in cn:
-            r = zc.read(rels_src).decode()
-            for old, new in chart_map.items():
-                r = r.replace(f"../charts/{Path(old).name}", f"../charts/{Path(new).name}")
-            new_parts[f"xl/drawings/_rels/drawing{draw_no}.xml.rels"] = r.encode()
+            # Targets may be written absolute ("/xl/charts/chart1.xml") or relative
+            # ("../charts/chart1.xml"); match on the filename so both are remapped.
+            # Missing this left the cover's drawing pointing at Mel's own charts.
+            by_name = {Path(o).name: Path(n).name for o, n in chart_map.items()}
+            rr = etree.fromstring(zc.read(rels_src))
+            for rel in rr:
+                t = rel.get("Target")
+                if not t:
+                    continue
+                nm = Path(t).name
+                if nm in by_name:
+                    rel.set("Target", f"../charts/{by_name[nm]}")
+            new_parts[f"xl/drawings/_rels/drawing{draw_no}.xml.rels"] = etree.tostring(
+                rr, xml_declaration=True, encoding="UTF-8", standalone=True)
         new_parts[f"xl/worksheets/_rels/sheet{sheet_no}.xml.rels"] = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
@@ -163,7 +173,16 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
     el.set("name", sheet_name)
     el.set("sheetId", str(sid))
     el.set(QR("id"), rid)
-    sheets.insert(0 if first else len(sheets), el)
+    pos = 0 if first else len(sheets)
+    sheets.insert(pos, el)
+    # localSheetId is a POSITION, not an id. Inserting a sheet at the front shifts
+    # every sheet after it, so any defined name scoped at or beyond that point has
+    # to move with it — otherwise Excel finds e.g. _FilterDatabase claiming to be
+    # on COVER while pointing at DAILY, repairs the file, and drops the drawings.
+    for dn in wb.iter(Q("definedName")):
+        lsi = dn.get("localSheetId")
+        if lsi is not None and int(lsi) >= pos:
+            dn.set("localSheetId", str(int(lsi) + 1))
     # open on the cover
     for bv in wb.findall(Q("bookViews")) + [wb]:
         for w in bv.findall(Q("workbookView")):
@@ -175,6 +194,8 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
         f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/'
         f'2006/relationships/worksheet" Target="worksheets/sheet{sheet_no}.xml"/>'
         "</Relationships>")
+    # calcChain is dropped below, so its relationship has to go with it
+    new_rels = re.sub(r'<Relationship[^>]*Target="calcChain\.xml"[^>]*/>', "", new_rels)
 
     # ── content types ───────────────────────────────────────────────
     ct = zm.read("[Content_Types].xml").decode()
@@ -193,9 +214,16 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
                "[Content_Types].xml": ct.encode(),
                "xl/styles.xml": new_styles}
 
+    # calcChain caches which sheet each formula lives on; after inserting a sheet a
+    # stale one is another thing Excel will "repair". It rebuilds it on open.
+    ct = ct.replace('<Override PartName="/xl/calcChain.xml" ContentType="application/'
+                    'vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/>', "")
+    replace["[Content_Types].xml"] = ct.encode()
+    drop = {"xl/calcChain.xml"}
+
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zo:
         for item in zm.infolist():
-            if item.filename in new_parts:          # a previous cover run
+            if item.filename in new_parts or item.filename in drop:
                 continue
             zo.writestr(item, replace.get(item.filename, zm.read(item.filename)))
         for name, data in new_parts.items():
