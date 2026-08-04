@@ -30,6 +30,20 @@ def _next(names, pat):
     return (max(ns) if ns else 0) + 1
 
 
+IS_SHEET = re.compile(r"xl/worksheets/sheet\d+\.xml$")
+_TAB_SEL = re.compile(rb'(<sheetView\b[^>]*?)\s+tabSelected="[^"]*"')
+
+
+def _deselect(xml):
+    """Excel opens on whichever sheet carries tabSelected, whatever activeTab says.
+    Mel saves on DAILY, so without this the cover is never what Paul sees first."""
+    return _TAB_SEL.sub(rb"\1", xml)
+
+
+def _select(xml):
+    return re.sub(rb"(<sheetView\b)", rb'\1 tabSelected="1"', _deselect(xml), count=1)
+
+
 def _merge_styles(master_xml, cover_xml):
     """Append the cover's styles to the master's; return (new xml, index offset)."""
     mroot = etree.fromstring(master_xml)
@@ -120,7 +134,7 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
     new_styles, offset = _merge_styles(zm.read("xl/styles.xml"), zc.read("xl/styles.xml"))
 
     sheet_src = next(n for n in cn if re.match(r"xl/worksheets/sheet\d+\.xml$", n))
-    sheet_xml = _shift_style_indices(zc.read(sheet_src), offset)
+    sheet_xml = _select(_shift_style_indices(zc.read(sheet_src), offset))
     sheet_dst = f"xl/worksheets/sheet{sheet_no}.xml"
 
     draw_src = next((n for n in cn if re.match(r"xl/drawings/drawing\d+\.xml$", n)), None)
@@ -242,7 +256,10 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
         for item in zm.infolist():
             if item.filename in new_parts or item.filename in drop:
                 continue
-            zo.writestr(item, replace.get(item.filename, zm.read(item.filename)))
+            data = replace.get(item.filename, zm.read(item.filename))
+            if IS_SHEET.match(item.filename):
+                data = _deselect(data)
+            zo.writestr(item, data)
         for name, data in new_parts.items():
             zo.writestr(name, data)
     zm.close(); zc.close()
