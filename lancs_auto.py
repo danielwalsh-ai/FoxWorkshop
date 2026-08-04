@@ -186,32 +186,7 @@ def validate(r):
     return p
 
 
-def build_cover(book, out_dir, company="Fox Brothers (Lancashire)"):
-    """Rebuild Paul's cover tab onto the workbook Mel sent and hand back the path.
-
-    Returns None on failure — the pack still goes out; a cover problem shouldn't
-    hold up the daily report.
-    """
-    try:
-        rows = (lancs_cover.highlighted_rows(str(book))
-                or lancs_cover.default_rows(str(book)))
-        months, data = lancs_cover.monthly(str(book), rows)
-        if not months:
-            print("  ! cover: no months in range, skipping")
-            return None
-        secs = lancs_cover.section_map(str(book))
-        tmp_cover = Path(out_dir) / "_cover.xlsx"
-        lancs_cover.build_cover_workbook(months, data, str(tmp_cover),
-                                         sections=secs, company=company)
-        out = Path(out_dir) / Path(book).name          # same name Mel uses
-        lancs_inject.inject(str(book), str(tmp_cover), str(out))
-        tmp_cover.unlink(missing_ok=True)
-        print(f"  cover rebuilt: {len(rows)} rows, {len(months)} months "
-              f"({months[0]:%b %y}..{months[-1]:%b %y})")
-        return out
-    except Exception as e:
-        print(f"  ! cover sheet failed ({e}) — sending the pack alone")
-        return None
+build_cover = lancs_cover.build_onto          # shared with the Leyland run
 
 
 def send(r, pdf, dry_run=False, to_me=False, workbook=None):

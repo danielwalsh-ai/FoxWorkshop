@@ -47,6 +47,8 @@ from openpyxl.utils import get_column_letter
 from wagon_master_fill import (fill_master, master_state, read_transaction_report,
                                SheetXmlEditor, VEHICLE_ROWS)
 import tidy_master
+import lancs_cover                  # Paul wants the same cover tab on both masters
+import lancs_inject
 
 HERE = Path(__file__).parent
 STATE_DIR = HERE / "state"
@@ -286,6 +288,12 @@ def ensure_master(tmpdir, state):
     if not found:
         return False
     STATE_DIR.mkdir(exist_ok=True)
+    # What comes back from Gmail is the copy Paul got, so it already has a cover.
+    # Work from a clean master and add exactly one cover at send time.
+    bare = Path(tmpdir) / "bare.xlsx"
+    if lancs_inject.strip(str(found), str(bare))["removed"]:
+        print("  removed the previous cover tab before filling")
+        found = bare
     shutil.copy(found, MASTER_FILE)
     state["watermark"] = when.isoformat()
     # Persist immediately. If this run finds nothing new it returns early, and a later
@@ -725,9 +733,12 @@ def rows_html(results):
     return "\n".join(out)
 
 
-def send(final_path, results, note, dry_run=False, to_me=False):
+def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
     last = max(dt.date.fromisoformat(r["date"]) for r in results)
     fname = master_filename(last)
+    # The covered copy is what Paul gets; the plain one stays as our stored master.
+    attach = workbook if workbook and Path(workbook).exists() else final_path
+    cover = " The cover tab is the first thing you'll see." if attach != final_path else ""
     subject = f"Wagon earnings — master updated to {ordinal(last.day)} {last:%B}"
     html = f"""
     <div style="font-family:Arial,Helvetica,sans-serif;color:#24214a;font-size:15px">
@@ -740,7 +751,7 @@ def send(final_path, results, note, dry_run=False, to_me=False):
         {rows_html(results)}
       </table>
       <p style="font-size:13px;color:#666">Master attached, updated to
-         {ordinal(last.day)} {last:%B}.</p>
+         {ordinal(last.day)} {last:%B}.{cover}</p>
       <hr style="border:none;border-top:1px solid #ccc">
       <p style="font-size:12px;color:#888">Updated automatically from Katie's run sheets
          by danielwalsh.ai</p>
@@ -762,13 +773,15 @@ def send(final_path, results, note, dry_run=False, to_me=False):
     m["Subject"] = ("[TEST — would go to Paul] " if to_me else "") + subject
     m.set_content(plain)
     m.add_alternative(html, subtype="html")
-    m.add_attachment(Path(final_path).read_bytes(), maintype="application",
+    m.add_attachment(Path(attach).read_bytes(), maintype="application",
                      subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      filename=fname)
     if dry_run:
         print(f"\n[DRY RUN] would send to {', '.join(SEND_TO)} cc {', '.join(SEND_CC)}")
         print(f"[DRY RUN] subject: {subject}")
-        print(f"[DRY RUN] attachment: {fname}")
+        print(f"[DRY RUN] attachment: {fname} "
+              f"({Path(attach).stat().st_size/1e6:.1f} MB"
+              + (", with cover)" if cover else ")"))
         print(f"\n{plain}\n")
         return fname
     ctx = ssl.create_default_context()
@@ -921,7 +934,13 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
 
         last = max(dt.date.fromisoformat(r["date"]) for r in results)
         note = commentary(results, month_context(final, last))
-        fname = send(final, results, note, dry_run, to_me=to_me)
+        # Its own directory — the covered copy keeps the master's filename, so
+        # writing it alongside `final` would mean reading and writing one file.
+        cover_dir = Path(tmp) / "covered"
+        cover_dir.mkdir(exist_ok=True)
+        covered = lancs_cover.build_onto(final, cover_dir,
+                                         company="Fox Brothers (Leyland)")
+        fname = send(final, results, note, dry_run, to_me=to_me, workbook=covered)
 
         if rejected:      # good days went to Paul; the data issue is Daniel's to chase
             notify_daniel(

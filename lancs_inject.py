@@ -112,6 +112,92 @@ def _shift_style_indices(sheet_xml, offset):
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
+def _targets(z, rels_part):
+    if rels_part not in z.namelist():
+        return []
+    return re.findall(r'Target="([^"]+)"', z.read(rels_part).decode())
+
+
+def strip(master_path, out_path, sheet_name="COVER"):
+    """Remove a previously injected cover — sheet, drawing, charts and all.
+
+    Leyland's master round-trips through our own email, so it comes back from
+    Gmail already carrying a cover. inject() drops the old <sheet> entry but not
+    its parts, and Excel treats a worksheet part that nothing points at as damage.
+    Stripping first keeps the file the same size every day and repair-free.
+    """
+    z = zipfile.ZipFile(master_path)
+    wb = etree.fromstring(z.read("xl/workbook.xml"))
+    sheets = wb.find(Q("sheets"))
+    hit = [(i, s) for i, s in enumerate(sheets) if s.get("name") == sheet_name]
+    if not hit:
+        z.close()
+        shutil.copyfile(master_path, out_path)
+        return {"removed": False}
+    pos, el = hit[0]
+    rid = el.get(QR("id"))
+
+    rels_xml = z.read("xl/_rels/workbook.xml.rels").decode()
+    rel = re.search(rf'<Relationship[^>]*Id="{rid}"[^>]*/>', rels_xml).group(0)
+    part = "xl/" + re.search(r'Target="([^"]+)"', rel).group(1).lstrip("/")
+
+    doomed = {part}
+    srels = f"xl/worksheets/_rels/{Path(part).name}.rels"
+    if srels in z.namelist():
+        doomed.add(srels)
+        for t in _targets(z, srels):
+            if "drawing" not in t:
+                continue
+            draw = f"xl/drawings/{Path(t).name}"
+            drels = f"xl/drawings/_rels/{Path(draw).name}.rels"
+            doomed.update({draw, drels})       # filtered against the zip below
+            for t2 in _targets(z, drels):
+                nm = Path(t2).name
+                if nm.startswith("chart"):
+                    doomed.add(f"xl/charts/{nm}")
+                    crels = f"xl/charts/_rels/{nm}.rels"
+                    if crels in z.namelist():
+                        doomed.add(crels)
+                        # colours/style parts hang off the chart, not the drawing
+                        doomed |= {f"xl/charts/{Path(t3).name}"
+                                   for t3 in _targets(z, crels)}
+                elif "/media/" in t2 or nm.startswith("image"):
+                    doomed.add(f"xl/media/{nm}")      # only the cover carries images
+    doomed = {d for d in doomed if d in z.namelist()}
+
+    sheets.remove(el)
+    for dn in list(wb.iter(Q("definedName"))):
+        lsi = dn.get("localSheetId")
+        if lsi is None:
+            continue
+        if int(lsi) == pos:
+            dn.getparent().remove(dn)          # scoped to the sheet we just removed
+        elif int(lsi) > pos:
+            dn.set("localSheetId", str(int(lsi) - 1))
+    for w in wb.iter(Q("workbookView")):
+        w.set("activeTab", "0")
+
+    new_rels = rels_xml.replace(rel, "")
+    new_rels = re.sub(r'<Relationship[^>]*Target="calcChain\.xml"[^>]*/>', "", new_rels)
+    ct = z.read("[Content_Types].xml").decode()
+    for d in doomed:
+        ct = re.sub(rf'<Override PartName="/{re.escape(d)}"[^>]*/>', "", ct)
+    ct = re.sub(r'<Override PartName="/xl/calcChain\.xml"[^>]*/>', "", ct)
+
+    replace = {"xl/workbook.xml": etree.tostring(wb, xml_declaration=True,
+                                                 encoding="UTF-8", standalone=True),
+               "xl/_rels/workbook.xml.rels": new_rels.encode(),
+               "[Content_Types].xml": ct.encode()}
+    drop = doomed | {"xl/calcChain.xml"}
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zo:
+        for item in z.infolist():
+            if item.filename in drop:
+                continue
+            zo.writestr(item, replace.get(item.filename, z.read(item.filename)))
+    z.close()
+    return {"removed": True, "parts": len(doomed)}
+
+
 def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
     zm = zipfile.ZipFile(master_path)
     zc = zipfile.ZipFile(cover_path)

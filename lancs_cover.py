@@ -377,6 +377,36 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None,
     return last_row, len(months)
 
 
+def build_onto(book, out_dir, company="Fox Brothers (Lancashire)"):
+    """Rebuild the cover tab onto `book` and hand back the covered copy.
+
+    Same filename as the original, so whoever owns the master carries on saving
+    over their own file. Returns None on failure — the daily report still goes
+    out; a cover problem shouldn't hold up the numbers.
+    """
+    import lancs_inject
+    try:
+        rows = highlighted_rows(str(book)) or default_rows(str(book))
+        months, data = monthly(str(book), rows)
+        if not months:
+            print("  ! cover: no months in range, skipping")
+            return None
+        tmp = Path(out_dir) / "_cover.xlsx"
+        build_cover_workbook(months, data, str(tmp),
+                             sections=section_map(str(book)), company=company)
+        out = Path(out_dir) / Path(book).name
+        if out.resolve() == Path(book).resolve():
+            raise ValueError("out_dir would overwrite the source workbook")
+        lancs_inject.inject(str(book), str(tmp), str(out))
+        tmp.unlink(missing_ok=True)
+        print(f"  cover rebuilt: {len(rows)} rows, {len(months)} months "
+              f"({months[0]:%b %y}..{months[-1]:%b %y})")
+        return out
+    except Exception as e:
+        print(f"  ! cover sheet failed ({e}) — sending without it")
+        return None
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
