@@ -29,6 +29,8 @@ from pathlib import Path
 from email.message import EmailMessage
 
 import lancs_pack
+import lancs_cover
+import lancs_inject
 from lancs_pack import money
 
 HERE = Path(__file__).parent
@@ -144,7 +146,8 @@ def body_text(r):
         f"Wagons under target: {k['under_target']} of {k['in_service']} in service\n"
         f"Wagons off the road on the day: {int(k['off_road'] or 0)}\n"
         f"Wagon-days lost in the last 7 trading days: {int(k['wagon_days_lost'] or 0)}\n\n"
-        "Full breakdown in the attached PDF.\n\n"
+        "Full breakdown in the attached PDF, and the master with the cover sheet "
+        "is attached alongside it.\n\n"
         f"{SIGN_OFF}\n")
 
 
@@ -161,7 +164,7 @@ Rolling 5-day average: {money(k['rolling_5day'])}<br>
 Wagons under target: {k['under_target']} of {k['in_service']} in service<br>
 Wagons off the road on the day: {int(k['off_road'] or 0)}<br>
 Wagon-days lost in the last 7 trading days: {int(k['wagon_days_lost'] or 0)}</p>
-<p>Full breakdown in the attached PDF.</p>
+<p>Full breakdown in the attached PDF, and the master with the cover sheet is attached alongside it.</p>
 <p>{SIGN_OFF}</p>
 </body></html>"""
 
@@ -183,7 +186,35 @@ def validate(r):
     return p
 
 
-def send(r, pdf, dry_run=False, to_me=False):
+def build_cover(book, out_dir, company="Fox Brothers (Lancashire)"):
+    """Rebuild Paul's cover tab onto the workbook Mel sent and hand back the path.
+
+    Returns None on failure — the pack still goes out; a cover problem shouldn't
+    hold up the daily report.
+    """
+    try:
+        rows = (lancs_cover.highlighted_rows(str(book))
+                or lancs_cover.default_rows(str(book)))
+        months, data = lancs_cover.monthly(str(book), rows)
+        if not months:
+            print("  ! cover: no months in range, skipping")
+            return None
+        secs = lancs_cover.section_map(str(book))
+        tmp_cover = Path(out_dir) / "_cover.xlsx"
+        lancs_cover.build_cover_workbook(months, data, str(tmp_cover),
+                                         sections=secs, company=company)
+        out = Path(out_dir) / Path(book).name          # same name Mel uses
+        lancs_inject.inject(str(book), str(tmp_cover), str(out))
+        tmp_cover.unlink(missing_ok=True)
+        print(f"  cover rebuilt: {len(rows)} rows, {len(months)} months "
+              f"({months[0]:%b %y}..{months[-1]:%b %y})")
+        return out
+    except Exception as e:
+        print(f"  ! cover sheet failed ({e}) — sending the pack alone")
+        return None
+
+
+def send(r, pdf, dry_run=False, to_me=False, workbook=None):
     d = r["focus"]
     subject = f"Daily Wagon Earnings Pack — {d:%a} {d.day} {d:%b %Y}"
     to = [ENV["GMAIL_USER"]] if to_me else SEND_TO
@@ -200,11 +231,20 @@ def send(r, pdf, dry_run=False, to_me=False):
     m.add_alternative(body_html(r), subtype="html")
     m.add_attachment(Path(pdf).read_bytes(), maintype="application", subtype="pdf",
                      filename=Path(pdf).name)
+    if workbook and Path(workbook).exists():
+        m.add_attachment(
+            Path(workbook).read_bytes(), maintype="application",
+            subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=Path(workbook).name)
     if dry_run:
         print(f"\n[DRY RUN] to {', '.join(to)}")
         print(f"[DRY RUN] cc {', '.join(cc) if cc else '-'}")
         print(f"[DRY RUN] subject: {subject}")
-        print(f"[DRY RUN] attach: {Path(pdf).name}\n")
+        print(f"[DRY RUN] attach: {Path(pdf).name}")
+        if workbook and Path(workbook).exists():
+            print(f"[DRY RUN] attach: {Path(workbook).name} "
+                  f"({Path(workbook).stat().st_size/1e6:.1f} MB)")
+        print()
         print(body_text(r))
         return
     ctx = ssl.create_default_context()
@@ -312,7 +352,8 @@ def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False):
                    + "\n".join(f"  - {p}" for p in problems), dry_run)
             return 1
 
-        send(r, pdf, dry_run, to_me)
+        workbook = build_cover(book, pack_dir)
+        send(r, pdf, dry_run, to_me, workbook=workbook)
         if not dry_run and not to_me:
             state["processed_message_ids"] = (state["processed_message_ids"]
                                               + [m["id"] for m in new])[-300:]
