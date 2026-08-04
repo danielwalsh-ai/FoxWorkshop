@@ -52,6 +52,7 @@ SECTION_NAMES = {
     "ALLY BODY": "Alloy", "ALLY": "Alloy",
     "HOOKS": "Hooks", "HOOKS ON HIRE": "Hooks on hire",
     "SWEEPER": "Sweepers", "SWEEPERS": "Sweepers",
+    "GRABS": "Grabs", "GRAB": "Grabs",
     "8W SLEEPERS": "8W Sleepers", "8 W SLEEPERS": "8W Sleepers",
 }
 
@@ -115,10 +116,47 @@ def highlighted_rows(path, sheet="DAILY", limit=200):
     return out
 
 
+def date_layout(ws):
+    """(date_row, first_data_col). Lancashire has dates on row 1 from column D,
+    Leyland on row 2 from column C, so this is detected rather than assumed."""
+    best = (DATE_ROW, FIRST_DATA_COL, -1)
+    for r in (1, 2, 3):
+        cs = [c for c in range(2, min(ws.max_column, 60) + 1)
+              if isinstance(ws.cell(r, c).value, dt.datetime)]
+        if len(cs) > best[2]:
+            best = (r, cs[0] if cs else FIRST_DATA_COL, len(cs))
+    return best[0], best[1]
+
+
+def default_rows(path, sheet="DAILY", limit=200):
+    """Leyland has no highlighting, so mirror Paul's Lancashire selection by
+    meaning: each block's AVERAGE and TOTAL, then the fleet-wide summary rows
+    that follow the last block."""
+    ws = openpyxl.load_workbook(path)[sheet]
+    secs = section_map(path, sheet, limit)
+    last_block = max(secs) if secs else 0
+    out = []
+    for r in range(1, limit):
+        v = ws.cell(r, 1).value
+        if not isinstance(v, str) or not v.strip():
+            continue
+        lab, up = v.strip(), v.strip().upper()
+        if r <= last_block:
+            if up.endswith(("AVERAGE", "TOTAL")):
+                out.append((r, lab))
+        # The night-work block lists individual wagons as reg+N (PJ21OWEN), so
+        # allow a 4-letter tail or they land in the summary as their own charts.
+        elif not re.match(r"^[A-Z]{2}[0-9]{2}[A-Z]{3,4}$", up.replace(" ", "")):
+            if not up.startswith("DATE "):
+                out.append((r, lab))
+    return out
+
+
 def monthly(path, rows, start=START, sheet="DAILY"):
     """{(row,label): {month_start: value}} plus the ordered month list."""
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb[sheet]
+    DATE_ROW, FIRST_DATA_COL = date_layout(ws)
     cols = {}
     for c in range(FIRST_DATA_COL, ws.max_column + 1):
         v = ws.cell(DATE_ROW, c).value
@@ -141,7 +179,8 @@ def monthly(path, rows, start=START, sheet="DAILY"):
     return months, data
 
 
-def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None):
+def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None,
+                         company="Fox Brothers (Lancashire)"):
     """A standalone workbook holding just the cover sheet + its native chart."""
     from openpyxl.chart import BarChart, Reference, Series
     from openpyxl.chart.axis import ChartLines
@@ -171,7 +210,7 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None)
     for r, h in ((1, 15), (2, 15), (3, 15), (4, 6)):
         ws.row_dimensions[r].height = h
 
-    ws["A5"] = "Fox Brothers (Lancashire)"
+    ws["A5"] = company
     ws["A5"].font = Font(name="Calibri", size=20, bold=True, color=navy)
     ws["A6"] = "Monthly summary"
     ws["A6"].font = Font(name="Calibri", size=13, color=navy)
@@ -207,8 +246,12 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None)
         # "TOTAL EARNINGS" appears once per category, so without the section in
         # front of it six charts carry the same title and can't be told apart.
         sec = sections.get(r)
+        # Both sheets word these unevenly — SLEEEPERS, 8 W, ALLY BODY, SWEEPER —
+        # so normalise rather than echo them.
         if sec and lab.strip().upper().endswith("AVERAGE"):
-            shown = f"{sec} — Average"        # the sheet's own wording is uneven
+            shown = f"{sec} — Average"
+        elif sec and lab.strip().upper().endswith("TOTAL"):
+            shown = f"{sec} — Total"
         elif sec and _norm(sec) not in _norm(lab):
             shown = f"{sec} — {lab.title()}"
         else:
@@ -335,10 +378,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("master")
     ap.add_argument("-o", "--out", required=True)
+    ap.add_argument("--company", default="Fox Brothers (Lancashire)")
     a = ap.parse_args()
-    rows = highlighted_rows(a.master)
+    rows = highlighted_rows(a.master) or default_rows(a.master)
     months, data = monthly(a.master, rows)
     secs = section_map(a.master)
-    lr, nm = build_cover_workbook(months, data, a.out, sections=secs)
+    lr, nm = build_cover_workbook(months, data, a.out, sections=secs,
+                                  company=a.company)
     print(f"{len(rows)} highlighted rows x {nm} months "
           f"({months[0]:%b %Y} .. {months[-1]:%b %Y}) -> {a.out}")
