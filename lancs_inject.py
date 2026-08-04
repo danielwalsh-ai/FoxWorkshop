@@ -128,6 +128,13 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
 
     # ── new parts ───────────────────────────────────────────────────
     new_parts = {sheet_dst: sheet_xml}
+    # The cover carries the Fox mark, so images travel with the drawing too.
+    media_base = _next(mn, r"xl/media/image(\d+)\.")
+    media_map = {}
+    for i, n in enumerate(sorted(x for x in cn if x.startswith("xl/media/"))):
+        media_map[n] = f"xl/media/image{media_base + i}{Path(n).suffix}"
+        new_parts[media_map[n]] = zc.read(n)
+
     if draw_src:
         new_parts[draw_dst] = zc.read(draw_src)
         rels_src = f"xl/drawings/_rels/{Path(draw_src).name}.rels"
@@ -136,6 +143,7 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
             # ("../charts/chart1.xml"); match on the filename so both are remapped.
             # Missing this left the cover's drawing pointing at Mel's own charts.
             by_name = {Path(o).name: Path(n).name for o, n in chart_map.items()}
+            by_media = {Path(o).name: Path(n).name for o, n in media_map.items()}
             rr = etree.fromstring(zc.read(rels_src))
             for rel in rr:
                 t = rel.get("Target")
@@ -144,6 +152,8 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
                 nm = Path(t).name
                 if nm in by_name:
                     rel.set("Target", f"../charts/{by_name[nm]}")
+                elif nm in by_media:
+                    rel.set("Target", f"../media/{by_media[nm]}")
             new_parts[f"xl/drawings/_rels/drawing{draw_no}.xml.rels"] = etree.tostring(
                 rr, xml_declaration=True, encoding="UTF-8", standalone=True)
         new_parts[f"xl/worksheets/_rels/sheet{sheet_no}.xml.rels"] = (
@@ -207,6 +217,13 @@ def inject(master_path, cover_path, out_path, sheet_name="COVER", first=True):
     for new in chart_map.values():
         adds.append(f'<Override PartName="/{new}" ContentType="application/vnd.'
                     f'openxmlformats-officedocument.drawingml.chart+xml"/>')
+    # Mel's workbook has no images, so the image extensions need declaring or
+    # Excel drops the logo as unreadable content.
+    for new in media_map.values():
+        ext = Path(new).suffix.lstrip(".").lower()
+        decl = f'<Default Extension="{ext}" ContentType="image/{"jpeg" if ext in ("jpg","jpeg") else ext}"/>'
+        if f'Extension="{ext}"' not in ct and decl not in adds:
+            adds.insert(0, decl)
     ct = ct.replace("</Types>", "".join(adds) + "</Types>")
 
     replace = {"xl/workbook.xml": new_wb,

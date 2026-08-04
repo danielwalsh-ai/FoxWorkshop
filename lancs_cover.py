@@ -16,12 +16,18 @@ import datetime as dt
 from pathlib import Path
 
 import openpyxl
+from openpyxl.drawing.image import Image as XLImage
 
 HIGHLIGHT = "FF0070C0"          # the dark blue Paul used
-START = dt.date(2025, 1, 1)
+START = dt.date(2026, 1, 1)
 DATE_ROW, FIRST_DATA_COL = 1, 4
 SHEET_NAME = "COVER"
 FOX_NAVY = "1A2646"      # Fox Group navy, sampled from the pack
+CHARTS_ACROSS = 4        # grid, not one long column
+CHART_W, CHART_H = 13.0, 7.0     # cm
+COL_STEP, ROW_STEP = 7, 19       # columns / rows between chart anchors
+FOX_ORANGE = "E97A1F"
+LOGO = Path(__file__).parent / "static" / "fox-group-logo.png"
 TREND_RED = "C00000"      # trend line
 
 # Rows that are a rate rather than a running total have to be averaged over the
@@ -155,17 +161,28 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None)
 
     navy = "FF" + FOX_NAVY
     ws.sheet_view.showGridLines = False          # cleaner behind the charts
-    ws["A1"] = "Fox Brothers (Lancashire)"
-    ws["A1"].font = Font(name="Calibri", size=20, bold=True, color=navy)
-    ws["A2"] = "Monthly summary"
-    ws["A2"].font = Font(name="Calibri", size=13, color=navy)
-    ws["A3"] = (f"Rows selected by Paul Fox, by month from {min(months):%B %Y}. "
-                f"Totals summed; averages and wagon counts averaged.")
-    ws["A3"].font = Font(name="Calibri", size=9, italic=True, color="FF7F7F7F")
-    ws.row_dimensions[1].height = 26
-    ws.row_dimensions[2].height = 18
 
-    hdr = 5
+    # Fox mark top-left, then the title block, then a thin navy rule.
+    if LOGO.exists():
+        img = XLImage(str(LOGO))
+        img.width, img.height = 232, 52          # keeps the 4.47:1 aspect
+        img.anchor = "A1"
+        ws.add_image(img)
+    for r, h in ((1, 15), (2, 15), (3, 15), (4, 6)):
+        ws.row_dimensions[r].height = h
+
+    ws["A5"] = "Fox Brothers (Lancashire)"
+    ws["A5"].font = Font(name="Calibri", size=20, bold=True, color=navy)
+    ws["A6"] = "Monthly summary"
+    ws["A6"].font = Font(name="Calibri", size=13, color=navy)
+    ws["A7"] = (f"Rows selected by Paul Fox, by month from {min(months):%B %Y}. "
+                f"Totals summed; averages and wagon counts averaged.")
+    ws["A7"].font = Font(name="Calibri", size=9, italic=True, color="FF7F7F7F")
+    ws.row_dimensions[5].height = 27
+    ws.row_dimensions[6].height = 19
+    ws.row_dimensions[8].height = 5
+
+    hdr = 9
     thin = Side(style="thin", color="FFD9D9D9")
     edge = Border(bottom=thin)
     hc = ws.cell(hdr, 1, "Metric")
@@ -179,6 +196,9 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None)
         c.fill = PatternFill("solid", fgColor=navy)
         c.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[hdr].height = 20
+    rule = PatternFill("solid", fgColor="FF" + FOX_ORANGE)
+    for j in range(max(len(months) + 1, 8)):
+        ws.cell(hdr - 1, 1 + j).fill = rule
 
     band = PatternFill("solid", fgColor="FFF4F6F9")
     sections = sections or {}
@@ -208,7 +228,10 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None)
     last_row = hdr + len(data)
 
     ws.column_dimensions["A"].width = 32
-    for j in range(len(months)):
+    # Every column the charts sit on gets the same width, not just the ones the
+    # table uses — otherwise the 4-across grid drifts once it runs past the table.
+    grid_cols = max(len(months), CHARTS_ACROSS * COL_STEP + 1)
+    for j in range(grid_cols):
         ws.column_dimensions[get_column_letter(2 + j)].width = 10.5
     # No frozen panes. A frozen column A clips any chart anchored there — you'd
     # have to widen the column to see it — and a frozen header row leaves month
@@ -219,9 +242,12 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None)
     # chart everything but the money is a flat line.
     wanted = list(chart_rows if chart_rows is not None
                   else range(hdr + 1, last_row + 1))
-    anchor = last_row + 3
-    STEP = 16                       # rows per chart block
+    # Laid out four across rather than one long column. Anchors start at column B
+    # so every chart sits on the same uniform column width — column A is much wider
+    # for the metric names and would throw the grid out.
+    top = last_row + 3
     skipped = []
+    placed = 0
     for rr in wanted:
         label = str(ws.cell(rr, 1).value)
         # Several rows only start part-way through — the category TOTAL EARNINGS
@@ -239,7 +265,7 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None)
         ch.title = label
         ch.y_axis.title = None
         ch.x_axis.title = None
-        ch.height, ch.width = 7.0, 26
+        ch.height, ch.width = CHART_H, CHART_W
         ch.legend = None
         ch.gapWidth = 55                       # chunkier bars, less white space
         ch.overlap = -10
@@ -284,8 +310,10 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None)
                     defRPr=CharacterProperties(sz=800, solidFill="595959")), endParaRPr=None)])
         ch.x_axis.delete = False
         ch.y_axis.delete = False
-        ws.add_chart(ch, f"A{anchor}")
-        anchor += STEP
+        col = get_column_letter(2 + (placed % CHARTS_ACROSS) * COL_STEP)
+        row = top + (placed // CHARTS_ACROSS) * ROW_STEP
+        ws.add_chart(ch, f"{col}{row}")
+        placed += 1
     if skipped:
         print(f"  no data, no chart: {', '.join(skipped)}")
 
