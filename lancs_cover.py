@@ -81,6 +81,7 @@ def build_cover_workbook(months, data, out_path, chart_rows=None):
     from openpyxl.chart import BarChart, Reference, Series
     from openpyxl.chart.axis import ChartLines
     from openpyxl.chart.trendline import Trendline
+    from openpyxl.chart.label import DataLabelList
     from openpyxl.chart.shapes import GraphicalProperties
     from openpyxl.chart.text import RichText
     from openpyxl.drawing.line import LineProperties
@@ -184,6 +185,21 @@ def build_cover_workbook(months, data, out_path, chart_rows=None):
         s.trendline.graphicalProperties.line = LineProperties(solidFill=TREND_RED, w=22000)
         ch.series.append(s)
         ch.set_categories(Reference(ws, min_col=c0, max_col=c1, min_row=hdr))
+
+        # Paul asked for the month's actual figure on each bar. Put it on the
+        # series, not the chart, so the trendline doesn't get labelled too.
+        s.dLbls = DataLabelList()
+        s.dLbls.showVal = True
+        s.dLbls.showSerName = False
+        s.dLbls.showCatName = False
+        s.dLbls.showLegendKey = False
+        s.dLbls.showBubbleSize = False
+        s.dLbls.numFmt = "#,##0"
+        s.dLbls.dLblPos = "outEnd"
+        s.dLbls.txPr = RichText(
+            p=[Paragraph(pPr=ParagraphProperties(
+                defRPr=CharacterProperties(sz=700, b=False, solidFill="404040")),
+                endParaRPr=None)])
 
         # quiet axes: thin grey gridlines, no clutter
         ch.y_axis.majorGridlines = ChartLines(
