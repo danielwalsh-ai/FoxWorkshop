@@ -318,7 +318,9 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None,
         # every bar the same Fox navy, no outline
         s.graphicalProperties = GraphicalProperties(solidFill=FOX_NAVY)
         s.graphicalProperties.line.noFill = True
-        s.trendline = Trendline(trendlineType="linear")
+        # Excel shows the equation and R² by default when these are absent, so
+        # they have to be turned off explicitly rather than just left unset.
+        s.trendline = Trendline(trendlineType="linear", dispEq=False, dispRSqr=False)
         s.trendline.graphicalProperties = GraphicalProperties()
         s.trendline.graphicalProperties.line = LineProperties(solidFill=TREND_RED, w=22000)
         ch.series.append(s)
@@ -333,10 +335,12 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None,
         s.dLbls.showLegendKey = False
         s.dLbls.showBubbleSize = False
         s.dLbls.numFmt = "#,##0"
-        s.dLbls.dLblPos = "outEnd"
+        # Inside the bar top, in white — at outEnd the trendline runs straight
+        # through the figures.
+        s.dLbls.dLblPos = "inEnd"
         s.dLbls.txPr = RichText(
             p=[Paragraph(pPr=ParagraphProperties(
-                defRPr=CharacterProperties(sz=700, b=False, solidFill="404040")),
+                defRPr=CharacterProperties(sz=750, b=True, solidFill="FFFFFF")),
                 endParaRPr=None)])
 
         # quiet axes: thin grey gridlines, no clutter
