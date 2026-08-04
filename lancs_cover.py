@@ -33,6 +33,65 @@ def agg_for(label):
     return "sum"
 
 
+# Tidy display names for the section a row sits under. Derived from the block's
+# "<X> AVERAGE" row, so it works on the Leyland sheet too without a second list.
+SECTION_NAMES = {
+    "EVS": "EV's", "EV'S": "EV's",
+    "SLEEEPERS": "Sleepers", "SLEEPERS": "Sleepers",
+    "8 W": "8 Wheelers", "8W": "8 Wheelers", "8 W DAY CABS": "8 Wheelers",
+    "WHITE": "White Volvos", "WHITE VOLVOS": "White Volvos",
+    "ARTICS": "Artics", "ARTIC": "Artics",
+    "MIDLAND": "Midland", "MIDLANDS": "Midland",
+    "TIPWORX": "Tipworx", "BRAMPTON/TIPWORX": "Tipworx",
+    "ALLY BODY": "Alloy", "ALLY": "Alloy",
+    "HOOKS": "Hooks", "HOOKS ON HIRE": "Hooks on hire",
+    "SWEEPER": "Sweepers", "SWEEPERS": "Sweepers",
+    "8W SLEEPERS": "8W Sleepers", "8 W SLEEPERS": "8W Sleepers",
+}
+
+
+def _norm(s):
+    return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
+
+
+def section_map(path, sheet="DAILY", limit=200):
+    """{row: section} for every row inside a category block.
+
+    Keyed off the block *headers*, not the AVERAGE rows: each block runs header,
+    wagons, AVERAGE, then TOTAL EARNINGS / WAGES / FUEL / MARGIN, so anchoring on
+    AVERAGE puts a category's totals in the next section along. A block runs from
+    its header to the row before the next one; anything after the last block is
+    fleet-wide and gets no section.
+    """
+    ws = openpyxl.load_workbook(path)[sheet]
+    heads = []
+    for r in range(1, limit):
+        v = ws.cell(r, 1).value
+        if not isinstance(v, str) or not v.strip():
+            continue
+        key = v.strip().upper()
+        if key.endswith(("AVERAGE", "TOTAL")):
+            continue
+        name = SECTION_NAMES.get(key) or SECTION_NAMES.get(_norm(key))
+        if name:
+            heads.append((r, name))
+    # The last block has no following header, so run it to its own AVERAGE row
+    # plus the four total rows that trail it.
+    last_avg = max((r for r in range(1, limit)
+                    if isinstance(ws.cell(r, 1).value, str)
+                    and ws.cell(r, 1).value.strip().upper().endswith("AVERAGE")),
+                   default=None)
+    out = {}
+    for i, (r, name) in enumerate(heads):
+        if i + 1 < len(heads):
+            end = heads[i + 1][0] - 1
+        else:
+            end = (last_avg + 4) if last_avg and last_avg > r else r
+        for rr in range(r, end + 1):
+            out[rr] = name
+    return out
+
+
 def highlighted_rows(path, sheet="DAILY", limit=200):
     """[(row, label)] for every row Paul shaded, in sheet order."""
     ws = openpyxl.load_workbook(path)[sheet]
@@ -76,7 +135,7 @@ def monthly(path, rows, start=START, sheet="DAILY"):
     return months, data
 
 
-def build_cover_workbook(months, data, out_path, chart_rows=None):
+def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None):
     """A standalone workbook holding just the cover sheet + its native chart."""
     from openpyxl.chart import BarChart, Reference, Series
     from openpyxl.chart.axis import ChartLines
@@ -122,9 +181,19 @@ def build_cover_workbook(months, data, out_path, chart_rows=None):
     ws.row_dimensions[hdr].height = 20
 
     band = PatternFill("solid", fgColor="FFF4F6F9")
+    sections = sections or {}
     for i, ((r, lab), series) in enumerate(data.items()):
         rr = hdr + 1 + i
-        nc = ws.cell(rr, 1, lab)
+        # "TOTAL EARNINGS" appears once per category, so without the section in
+        # front of it six charts carry the same title and can't be told apart.
+        sec = sections.get(r)
+        if sec and lab.strip().upper().endswith("AVERAGE"):
+            shown = f"{sec} — Average"        # the sheet's own wording is uneven
+        elif sec and _norm(sec) not in _norm(lab):
+            shown = f"{sec} — {lab.title()}"
+        else:
+            shown = lab.title()
+        nc = ws.cell(rr, 1, shown)
         nc.font = Font(name="Calibri", size=9.5, bold=True, color="FF262626")
         nc.border = edge
         for j, mth in enumerate(months):
@@ -241,6 +310,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     rows = highlighted_rows(a.master)
     months, data = monthly(a.master, rows)
-    lr, nm = build_cover_workbook(months, data, a.out)
+    secs = section_map(a.master)
+    lr, nm = build_cover_workbook(months, data, a.out, sections=secs)
     print(f"{len(rows)} highlighted rows x {nm} months "
           f"({months[0]:%b %Y} .. {months[-1]:%b %Y}) -> {a.out}")
