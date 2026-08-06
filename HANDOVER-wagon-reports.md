@@ -205,15 +205,57 @@ generated PDFs. None of those matter, they rebuild themselves.
 
 ---
 
-## 8. Everything else in this folder
+## 8. Before deleting this folder
 
-The other projects sitting alongside this one, each its own git repo:
+Checked every project in `Desktop\Git hub\Claude code STP` on 04/08/2026.
 
-`fox-portal`, `fox-movement-order`, `fox-vor`, `fox-marina-hub`, `fox-samsara-map`,
-`fox-merch`, `fox-spotter`, `fox-waiting-time`, `cw-staff`, `tranzparts-staff`,
-`fw-classic-cars`, `preston-basketball`, `barge-pricing`, `label-detector`,
-`Kevin-MIT`.
+### Backed up on GitHub, safe to delete locally
 
-Before deleting any of them, check two things in each: that `git status` is clean
-and pushed, and whether it has its own `.env`. The code is safe on GitHub. The
-`.env` files are not.
+All clean, nothing uncommitted, nothing unpushed.
+
+| Project | Repo |
+|---|---|
+| fox-report | danielwalsh-ai/FoxWorkshop |
+| fox-portal | danielwalsh-ai/fox-underperformer-portal |
+| fox-movement-order | danielwalsh-ai/fox-movement-order |
+| fox-waiting-time | danielwalsh-ai/Fox-wating-time |
+| cw-staff | danielwalsh-ai/cw-staff |
+| tranzparts-staff | danielwalsh-ai/tranzparts-staff |
+| preston-basketball | danielwalsh-ai/Preston-Basketball |
+| Kevin-MIT | danielwalsh-ai/Kevin-MIT |
+
+### Duplicate, safe to delete
+
+**fox-marina-hub.** The real one is `Desktop\Git hub\Fox Ports\fox-marina-hub`,
+which is newer, has 60 files against 48, and is a git repo. The copy in this
+folder is the old scaffold version.
+
+### NOT backed up anywhere. These would be gone for good
+
+**No git repo, no copy elsewhere, nothing on GitHub.**
+
+| Project | Files | Notes |
+|---|---|---|
+| **fox-vor** | 14 | **Live** at vor.foxgroup.ai. Office dashboard plus the email and PDF |
+| **fox-samsara-map** | 26 | **Live** wagon map. Has its own `.env` |
+| **fw-classic-cars** | 190 | F&W Projects site rebuild, the biggest of them |
+| fox-merch | 24 | Merchandise store prototype |
+| fox-spotter | 16 | Truck spotting app, planning only |
+| label-detector | 15 | Jupyter notebook, image classifier |
+| barge-pricing | 2 | |
+
+The two live ones matter most. If `fox-vor` or `fox-samsara-map` goes, the
+services keep running on Coolify but there is no source to change them from.
+
+**Push these to GitHub before deleting anything.**
+
+### The `.env` files
+
+Three, all gitignored, none on GitHub:
+
+- `fox-report/.env`
+- `fox-portal/.env`
+- `fox-samsara-map/.env`
+
+Copy all three somewhere safe first. See section 7 for what is in the fox-report
+one and why it matters.
