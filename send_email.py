@@ -53,6 +53,9 @@ def send_report(pdf_path, xlsx_path, report_date_long, headline="", to_me=False)
         sender = GOOD
     recipients = [e.strip() for e in env.get("EMAIL_TO", "").split(",") if e.strip()]
     recipients = [GOOD if r.lower() == DEAD else r for r in recipients]
+    # recipients added in code (env not directly editable from chat) — DW 01/08/2026
+    ALWAYS_INCLUDE = ["reports@foxgroup.co"]
+    recipients += [a for a in ALWAYS_INCLUDE if a.lower() not in {r.lower() for r in recipients}]
     if to_me:
         recipients = [GOOD]
     seen = set()
