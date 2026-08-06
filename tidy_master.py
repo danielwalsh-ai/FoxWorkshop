@@ -16,7 +16,7 @@ import datetime as dt
 from lxml import etree
 import openpyxl
 from openpyxl.utils import get_column_letter, column_index_from_string
-from wagon_master_fill import VEHICLE_ROWS
+from wagon_master_fill import detect_layout
 
 NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 def _q(t): return '{' + NS + '}' + t
@@ -28,6 +28,7 @@ def tidy(src, out=None, width=13):
     out = out or src
     ws = openpyxl.load_workbook(src)['DAILY']
     wsv = openpyxl.load_workbook(src, data_only=True)['DAILY']
+    vehicle_rows = set(detect_layout(ws).vehicle_rows)
     datecols = {wsv.cell(2, c).value.date(): c for c in range(3, wsv.max_column + 2)
                 if isinstance(wsv.cell(2, c).value, dt.datetime)}
     vis = sorted(c for c in datecols.values() if c >= FIRST_VISIBLE)
@@ -80,7 +81,7 @@ def tidy(src, out=None, width=13):
             cc = _ensure(rowel, c, rownum)
             if gstyle is not None:
                 cc.set('s', gstyle)                       # match template borders/format
-            if rownum in VEHICLE_ROWS:                    # blank stray £0 on wagon rows
+            if rownum in vehicle_rows:                    # blank stray £0 on wagon rows
                 v = cc.find(_q('v'))
                 if v is not None and cc.get('t') in (None, 'n') \
                         and v.text not in (None, '') and float(v.text) == 0:

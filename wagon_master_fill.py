@@ -48,18 +48,76 @@ def q(t): return f'{{{NS}}}{t}'
 
 EPOCH = date(1899, 12, 30)
 
-# ---- master layout (current template) -------------------------------------
-VEHICLE_ROWS = (list(range(4, 20)) + [23] + list(range(27, 73)) + list(range(76, 100))
-                + list(range(103, 112)) + list(range(115, 121)) + list(range(124, 138))
-                + list(range(141, 150)) + list(range(161, 167)))
-FORMULA_ROWS = [20, 21, 24, 25, 73, 74, 100, 101, 112, 113, 121, 122, 138, 139, 150, 151,
-                155, 156, 157, 158, 167, 168, 170, 171, 172, 173, 174, 175, 179, 180, 181,
-                182, 183, 186, 189, 192, 193, 194, 195, 196, 197, 198, 200]
-ROW_TOTAL_EARNINGS, ROW_NO_WAGONS = 168, 169
-ROW_PARTS, ROW_WORKSHOP, ROW_TYRES = 176, 177, 178
+# ---- master layout ----------------------------------------------------------
+# Nothing is addressed by row number. Finance insert rows into the DAILY tab (37
+# went in during August 2026), so every row is found by its column-A label when
+# the workbook is opened. If a label vanishes or turns up twice, the run stops
+# rather than write figures into the wrong rows.
 DATE_ROW, DAYNAME_ROW = 2, 1
-EARNINGS_SUM_GROUPS = [range(4, 20), [23], range(27, 73), range(76, 100), range(103, 112),
-                       range(115, 121), range(124, 138), range(141, 150), range(161, 167)]
+
+# Each block is a heading row, then one wagon per row, then its AVERAGE and TOTAL
+# rows. Wagons therefore live between the heading and the first AVERAGE after it.
+# The night-work block has no AVERAGE row; it ends at its final NIGHT WORK total.
+BLOCK_HEADINGS = ['HOOKS', 'HOOKS ON HIRE', '8W', 'ALLY BODY', 'ARTICS', 'GRABS',
+                  'SWEEPER', '8W SLEEPERS', 'ARTIC - NIGHT WORK - BREAKDOWN']
+NIGHT_BLOCK = 'ARTIC - NIGHT WORK - BREAKDOWN'
+UNIQUE_ANCHORS = {'total_earnings': 'TOTAL EARNINGS',
+                  'no_wagons': 'NO WAGONS',
+                  'parts': 'DAILY COSTINGS PARTS',
+                  'workshop': 'DAILY COSTINGS WORKSHOP',
+                  'tyres': 'DAILY COSTINGS TYRES'}
+
+from collections import namedtuple
+Layout = namedtuple('Layout', 'blocks vehicle_rows total_earnings no_wagons '
+                              'parts workshop tyres')
+
+
+def detect_layout(ws):
+    """Read the DAILY sheet's layout off its column-A labels.
+
+    `ws` is any openpyxl DAILY worksheet (values or formulas — only column A is
+    read). Verified to reproduce the pre-insert row constants exactly on the
+    29th July master. Raises ValueError if the sheet no longer looks like the
+    Leyland master."""
+    labels = {}
+    for r in range(1, ws.max_row + 1):
+        v = ws.cell(r, 1).value
+        if isinstance(v, str) and v.strip():
+            labels[r] = v.strip().upper()
+
+    def find(lbl):
+        hits = [r for r, v in labels.items() if v == lbl]
+        if len(hits) != 1:
+            raise ValueError(f"master layout: expected exactly one {lbl!r} row "
+                             f"in column A of DAILY, found {len(hits)}")
+        return hits[0]
+
+    anchors = {k: find(v) for k, v in UNIQUE_ANCHORS.items()}
+    te = anchors['total_earnings']
+    blocks, vehicle_rows = [], []
+    for name in BLOCK_HEADINGS:
+        h = find(name)
+        if name == NIGHT_BLOCK:
+            night_totals = [r for r, v in labels.items()
+                            if v == 'NIGHT WORK' and h < r < te]
+            if not night_totals:
+                raise ValueError("master layout: no NIGHT WORK total row between "
+                                 "the night-work heading and TOTAL EARNINGS")
+            end = max(night_totals) - 1
+        else:
+            avgs = [r for r, v in labels.items() if r > h and v.endswith(' AVERAGE')]
+            if not avgs:
+                raise ValueError(f"master layout: no AVERAGE row after the "
+                                 f"{name!r} heading")
+            end = min(avgs) - 1
+        blocks.append((name, h + 1, end))
+        vehicle_rows.extend(range(h + 1, end + 1))
+    n = len(vehicle_rows)
+    if not 100 <= n <= 200:
+        raise ValueError(f"master layout: found {n} wagon rows, expected 100-200 "
+                         f"— the DAILY tab does not look right")
+    return Layout(blocks, vehicle_rows, te, anchors['no_wagons'],
+                  anchors['parts'], anchors['workshop'], anchors['tyres'])
 
 # ---- source extraction -----------------------------------------------------
 
@@ -115,21 +173,23 @@ def read_transaction_report(path, report_date):
 # ---- master helpers --------------------------------------------------------
 
 def master_state(path):
-    """Return (sheet_xml_path, date_cols, last_date_col, last_populated_col, row->reg map)."""
+    """Return (sheet_xml_path, date_cols, last_date_col, last_populated_col,
+    row->reg map, ws, wsv, layout)."""
     wb = openpyxl.load_workbook(path, data_only=False)
     wbv = openpyxl.load_workbook(path, data_only=True)
     ws, wsv = wb['DAILY'], wbv['DAILY']
+    layout = detect_layout(ws)
     date_cols, last_date_col, last_pop_col = {}, None, None
     for c in range(3, ws.max_column + 2):
         d = wsv.cell(row=DATE_ROW, column=c).value
         if isinstance(d, datetime):
             date_cols[d.date()] = c
             last_date_col = c
-        f = ws.cell(row=ROW_TOTAL_EARNINGS, column=c).value
+        f = ws.cell(row=layout.total_earnings, column=c).value
         if f not in (None, ''):
             last_pop_col = c
     regs = {}
-    for r in VEHICLE_ROWS:
+    for r in layout.vehicle_rows:
         a = ws.cell(row=r, column=1).value
         if isinstance(a, str) and a.strip():
             regs[r] = a.strip().upper()
@@ -139,7 +199,7 @@ def master_state(path):
     rid = re.search(r'<sheet[^>]*name="DAILY"[^>]*r:id="(rId\d+)"', wbxml).group(1)
     target = re.search(rf'<Relationship[^>]*Id="{rid}"[^>]*Target="([^"]+)"', rels).group(1)
     z.close()
-    return 'xl/' + target, date_cols, last_date_col, last_pop_col, regs, ws, wsv
+    return 'xl/' + target, date_cols, last_date_col, last_pop_col, regs, ws, wsv, layout
 
 
 def col_for_date(date_cols, last_date_col, target):
@@ -220,10 +280,10 @@ class SheetXmlEditor:
 
 # ---- main fill -------------------------------------------------------------
 
-def _column_earnings(wsv, col):
+def _column_earnings(wsv, col, vehicle_rows):
     """Sum the wagon rows of one date column (ignores 'VOR' and other text)."""
     total = 0.0
-    for r in VEHICLE_ROWS:
+    for r in vehicle_rows:
         v = wsv.cell(row=r, column=col).value
         if isinstance(v, (int, float)):
             total += float(v)
@@ -239,20 +299,21 @@ def fill_master(master, daily, transactions, out, date_override=None, value_col=
     if transactions:
         parts, workshop, tyres = read_transaction_report(transactions, report_date)
 
-    (sheet_path, date_cols, last_date_col, last_pop_col, regs, ws, wsv) = master_state(master)
+    (sheet_path, date_cols, last_date_col, last_pop_col, regs, ws, wsv,
+     layout) = master_state(master)
     target_col, needs_extension = col_for_date(date_cols, last_date_col, report_date)
     # Per-column guard: refuse only if the TARGET column itself already holds data.
     # (The old `target_col <= last_pop_col` test blocked backfilling an empty gap that
     #  sits before a later populated column — e.g. filling 23-30 Jun when 2 Jul is done.)
-    was_populated = ws.cell(row=ROW_TOTAL_EARNINGS, column=target_col).value not in (None, '')
-    previous_total = _column_earnings(wsv, target_col) if was_populated else None
+    was_populated = ws.cell(row=layout.total_earnings, column=target_col).value not in (None, '')
+    previous_total = _column_earnings(wsv, target_col, layout.vehicle_rows) if was_populated else None
     if was_populated and not replace:
         raise ValueError(f"{report_date} maps to column {get_column_letter(target_col)} "
                          f"which is already populated - refusing to overwrite")
     # Source column for styles + standing formulas = nearest populated column strictly
     # BEFORE the target (the adjacent real day), not the global last populated column.
     source_col = next((c for c in range(target_col - 1, 2, -1)
-                       if ws.cell(row=ROW_TOTAL_EARNINGS, column=c).value not in (None, '')),
+                       if ws.cell(row=layout.total_earnings, column=c).value not in (None, '')),
                       last_pop_col)
     TL = get_column_letter(target_col)
     src_col_letter = get_column_letter(source_col)
@@ -287,7 +348,7 @@ def fill_master(master, daily, transactions, out, date_override=None, value_col=
     # On a replace, clear any wagon row the corrected sheet no longer carries —
     # otherwise a reg dropped from the revision would keep yesterday's figure.
     if was_populated:
-        for r in VEHICLE_ROWS:
+        for r in layout.vehicle_rows:
             if r not in fills:
                 ed.write(r, TL, style=ed.style_of(r, src_col_letter))
 
@@ -298,18 +359,31 @@ def fill_master(master, daily, transactions, out, date_override=None, value_col=
         else:
             ed.write(r, TL, value=v, style=st)
 
-    for r in FORMULA_ROWS:
+    # Standing formulas are whatever the adjacent populated day carries, so rows
+    # finance add later (they inserted 37 in Aug 2026) start copying across the
+    # day after they first put a formula in. Value rows are excluded: a wagon or
+    # costs cell must never be turned into a formula.
+    skip = set(layout.vehicle_rows) | {layout.no_wagons, layout.parts,
+                                       layout.workshop, layout.tyres,
+                                       DATE_ROW, DAYNAME_ROW}
+    formula_rows = [r for r in range(3, ws.max_row + 1)
+                    if r not in skip
+                    and isinstance(ws.cell(row=r, column=source_col).value, str)
+                    and ws.cell(row=r, column=source_col).value.startswith('=')]
+    if len(formula_rows) < 35:
+        raise ValueError(f"only {len(formula_rows)} formula rows found in source "
+                         f"column {src_col_letter} - expected 40+; refusing to fill "
+                         f"from a column that looks half-built")
+    for r in formula_rows:
         f = ws.cell(row=r, column=source_col).value
-        if not (isinstance(f, str) and f.startswith('=')):
-            raise ValueError(f"Expected formula at {src_col_letter}{r}, found {f!r}")
         ed.write(r, TL, formula=Translator(f, origin=f'{src_col_letter}{r}').translate_formula(f'{TL}{r}'),
                  style=ed.style_of(r, src_col_letter))
 
-    ed.write(ROW_NO_WAGONS, TL, value=wagon_count, style=ed.style_of(ROW_NO_WAGONS, src_col_letter))
+    ed.write(layout.no_wagons, TL, value=wagon_count, style=ed.style_of(layout.no_wagons, src_col_letter))
     if parts is not None:
-        ed.write(ROW_PARTS, TL, value=round(parts, 2), style=ed.style_of(ROW_PARTS, src_col_letter))
-        ed.write(ROW_WORKSHOP, TL, value=round(workshop, 2), style=ed.style_of(ROW_WORKSHOP, src_col_letter))
-        ed.write(ROW_TYRES, TL, value=round(tyres, 2), style=ed.style_of(ROW_TYRES, src_col_letter))
+        ed.write(layout.parts, TL, value=round(parts, 2), style=ed.style_of(layout.parts, src_col_letter))
+        ed.write(layout.workshop, TL, value=round(workshop, 2), style=ed.style_of(layout.workshop, src_col_letter))
+        ed.write(layout.tyres, TL, value=round(tyres, 2), style=ed.style_of(layout.tyres, src_col_letter))
     ed.mirror_format(src_col_letter, TL)   # borders on any rows the fill left empty
     ed.fix_dimension(TL)
 

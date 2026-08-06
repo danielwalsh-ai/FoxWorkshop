@@ -45,7 +45,7 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 
 from wagon_master_fill import (fill_master, master_state, read_transaction_report,
-                               SheetXmlEditor, VEHICLE_ROWS)
+                               SheetXmlEditor, detect_layout)
 import tidy_master
 import lancs_cover                  # Paul wants the same cover tab on both masters
 import lancs_inject
@@ -71,10 +71,12 @@ FLEET_MATCH_MIN = 0.70            # a real Leyland sheet scores 100%; Lancashire
 # Our own outgoing subject also contains "Wagon earnings"; never re-ingest it.
 OWN_SUBJECT = "master updated to"
 SEND_TO = ["paulfox@foxbrothers.co.uk"]
-SEND_CC = ["daniel.walsh@kfltd.uk"]
+SEND_CC = ["daniel.walsh@kfltd.uk",
+           "reports@foxgroup.co"]      # Paul's shared reports box, set up 05/08/2026
 MODEL = "claude-sonnet-5"
 
-ROW_TOTAL_EARNINGS, ROW_PARTS, ROW_WORKSHOP, ROW_TYRES = 168, 176, 177, 178
+# Rows are never addressed by number — wagon_master_fill.detect_layout finds every
+# row by its column-A label, so finance can insert rows without breaking the fill.
 MAX_PLAUSIBLE_DAY = 250_000      # a decimal slip would sail past this
 MIN_PLAUSIBLE_WEEKDAY = 20_000   # weekdays have run £75k–£97k all month
 DATE_WINDOW_DAYS = 90            # a mistyped year must not land in last year's column
@@ -354,7 +356,8 @@ def filename_date(name):
 
 def master_regs(master):
     ws = openpyxl.load_workbook(str(master))['DAILY']
-    regs = {str(ws.cell(r, 1).value or '').strip().upper() for r in VEHICLE_ROWS}
+    lay = detect_layout(ws)
+    regs = {str(ws.cell(r, 1).value or '').strip().upper() for r in lay.vehicle_rows}
     regs.discard('')
     return regs
 
@@ -419,7 +422,7 @@ def topup_costs(master, tmpdir):
     Katie's run sheets often arrive before that evening's workshop report, so a day
     can land with earnings only. This picks them up once the report exists, which
     keeps the master converging without anyone having to notice."""
-    sheet_path, date_cols, _, _, _, ws, wsv = master_state(str(master))
+    sheet_path, date_cols, _, _, _, ws, wsv, lay = master_state(str(master))
     # Deliberately narrow: chasing reports for months-old days costs a 90s IMAP
     # timeout each and never finds anything.
     floor = dt.date.today() - dt.timedelta(days=TOPUP_DAYS)
@@ -427,16 +430,16 @@ def topup_costs(master, tmpdir):
     for d, c in sorted(date_cols.items()):
         if d < floor or d > dt.date.today() or d.weekday() >= 5:
             continue                                   # weekend cost is averaged into Mon–Fri
-        f = ws.cell(ROW_TOTAL_EARNINGS, c).value
+        f = ws.cell(lay.total_earnings, c).value
         if not (isinstance(f, str) and f.startswith("=")):
             continue                                   # no earnings there yet
-        v = ws.cell(ROW_PARTS, c).value
+        v = ws.cell(lay.parts, c).value
         if isinstance(v, (int, float)) and v:
             continue                                   # already carries a real figure
         todo.append((d, c))
     donor = max((c for c in date_cols.values()
-                 if isinstance(ws.cell(ROW_PARTS, c).value, (int, float))
-                 and ws.cell(ROW_PARTS, c).value), default=None)
+                 if isinstance(ws.cell(lay.parts, c).value, (int, float))
+                 and ws.cell(lay.parts, c).value), default=None)
     if not todo or donor is None:
         return None, []
 
@@ -456,7 +459,7 @@ def topup_costs(master, tmpdir):
         if not parts and not tyres:
             continue
         L = get_column_letter(c)
-        for row, val in ((ROW_PARTS, parts), (ROW_WORKSHOP, workshop), (ROW_TYRES, tyres)):
+        for row, val in ((lay.parts, parts), (lay.workshop, workshop), (lay.tyres, tyres)):
             ed.write(row, L, value=round(float(val), 2), style=ed.style_of(row, donor_L))
         filled.append(d)
     if not filled:
@@ -472,45 +475,17 @@ def topup_costs(master, tmpdir):
 
 
 # ── build ───────────────────────────────────────────────────────────
-# Row numbers are hard-coded in wagon_master_fill, so if a row is ever inserted for a
-# new wagon everything below shifts and earnings would land in the wrong rows. These
-# labels pin the layout: if any has moved, stop rather than corrupt the master.
-ANCHORS = {
-    20: 'HOOKS AVERAGE', 21: 'HOOKS TOTAL',
-    24: 'HOOKS ON HIRE AVERAGE', 25: 'HOOKS ON HIRE TOTAL',
-    73: '8 W AVERAGE', 74: '8 W TOTAL',
-    100: 'ALLY BODY AVERAGE', 101: 'ALLY BODY TOTAL',
-    112: 'ARTICS AVERAGE', 113: 'ARTICS TOTAL',
-    121: 'GRABS AVERAGE', 122: 'GRABS TOTAL',
-    138: 'SWEEPER AVERAGE', 139: 'SWEEPER TOTAL',
-    150: '8W SLEEPERS AVERAGE', 151: '8W SLEEPER TOTAL',
-    167: 'NIGHT WORK', 168: 'TOTAL EARNINGS', 169: 'NO WAGONS',
-    176: 'DAILY COSTINGS PARTS', 177: 'DAILY COSTINGS WORKSHOP',
-    178: 'DAILY COSTINGS TYRES',
-}
-# Wagons live between a block's heading and its AVERAGE row.
-BLOCKS = [('HOOKS', 4, 19), ('HOOKS ON HIRE', 23, 23), ('8W', 27, 72),
-          ('ALLY BODY', 76, 99), ('ARTICS', 103, 111), ('GRABS', 115, 120),
-          ('SWEEPER', 124, 137), ('8W SLEEPERS', 141, 149),
-          ('ARTIC NIGHT WORK', 161, 166)]
-
-
 def check_structure(master):
-    """Confirm the master still has the shape the row numbers assume."""
+    """Confirm the master still reads as the Leyland layout.
+
+    Rows are found by label, not number, so inserted rows are fine — this only
+    trips if a load-bearing label has been renamed, deleted or duplicated."""
     ws = openpyxl.load_workbook(str(master))['DAILY']
-    moved = []
-    for row, label in ANCHORS.items():
-        got = str(ws.cell(row, 1).value or '').strip()
-        if got.upper() != label.upper():
-            moved.append(f"row {row} should read {label!r} but reads {got!r}")
-    return moved
-
-
-def block_for_row(row):
-    for name, a, b in BLOCKS:
-        if a <= row <= b:
-            return name, a, b
-    return None, None, None
+    try:
+        detect_layout(ws)
+    except ValueError as e:
+        return [str(e)]
+    return []
 
 
 def suggest_placement(master, daily_path, value_col, new_regs):
@@ -518,7 +493,7 @@ def suggest_placement(master, daily_path, value_col, new_regs):
     sheet and finding those neighbours in the master."""
     ws_m = openpyxl.load_workbook(str(master))['DAILY']
     where = {}
-    for name, a, b in BLOCKS:
+    for name, a, b in detect_layout(ws_m).blocks:
         for r in range(a, b + 1):
             v = str(ws_m.cell(r, 1).value or '').strip().upper()
             if v:
@@ -625,16 +600,17 @@ def month_context(path, upto):
     """Facts for the commentary, computed here so the model never invents a number."""
     ws = openpyxl.load_workbook(path)["DAILY"]
     wv = openpyxl.load_workbook(path, data_only=True)["DAILY"]
+    lay = detect_layout(ws)
     cols = {wv.cell(2, c).value.date(): c for c in range(3, wv.max_column + 2)
             if isinstance(wv.cell(2, c).value, dt.datetime)}
     days = []
     for d, c in sorted(cols.items()):
         if d.month != upto.month or d.year != upto.year or d > upto:
             continue
-        f = ws.cell(ROW_TOTAL_EARNINGS, c).value
+        f = ws.cell(lay.total_earnings, c).value
         if not (isinstance(f, str) and f.startswith("=")):
             continue
-        total = sum(float(wv.cell(r, c).value) for r in VEHICLE_ROWS
+        total = sum(float(wv.cell(r, c).value) for r in lay.vehicle_rows
                     if isinstance(wv.cell(r, c).value, (int, float)))
         days.append((d, round(total, 2)))
     weekdays = [(d, t) for d, t in days if d.weekday() < 5]

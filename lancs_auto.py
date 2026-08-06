@@ -38,14 +38,18 @@ STATE_DIR = HERE / "state"
 STATE_FILE = STATE_DIR / "lancs_auto.json"
 
 MEL = "mel@foxbrothers.co.uk"
-SUBJECT_MATCH = "Daily wagon earning master"
+# Mel renamed her file on 04/08/2026: she now saves over the covered copy we send
+# back, so the subject became "Mel master WITH COVER v9.xlsx". Accept either name,
+# and don't pin the version number — it will move if she saves it as something new.
+SUBJECT_MATCHES = ("daily wagon earning master", "mel master with cover")
 # Simon's distribution list, unchanged.
 SEND_TO = ["mel@foxbrothers.co.uk", "paulfox@foxbrothers.co.uk",
            "mark.hierons@foxgroup.co", "darren@foxbrothers.co.uk",
            "samuel@foxbrothers.co.uk", "katie@foxbrothers.co.uk",
            "stuartsweet@foxbrothers.co.uk"]
 SEND_CC = ["barry.hope@foxgroup.co", "mike.yates@foxgroup.co", "liam@foxgroup.co",
-           "Richard.Kirwin@foxgroup.co", "daniel.walsh@kfltd.uk"]
+           "Richard.Kirwin@foxgroup.co", "daniel.walsh@kfltd.uk",
+           "reports@foxgroup.co"]      # Paul's shared reports box, set up 05/08/2026
 SIGN_OFF = "Daniel"
 IMAP_TIMEOUT = 90
 MIN_PLAUSIBLE_DAY = 20_000
@@ -100,7 +104,8 @@ def fetch_mel(tmpdir, since_days=10, wanted=None):
             h = email.message_from_bytes(md[0][1])
             subj = str(email.header.make_header(
                 email.header.decode_header(h.get("Subject", ""))))
-            if SUBJECT_MATCH.lower() not in subj.lower() or subj.lower().startswith("recall"):
+            low = subj.lower()
+            if not any(s in low for s in SUBJECT_MATCHES) or low.startswith("recall"):
                 continue
             raw = h.get("Date")
             heads.append({"uid": uid, "subject": subj,

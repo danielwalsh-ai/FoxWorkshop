@@ -386,6 +386,14 @@ def build_onto(book, out_dir, company="Fox Brothers (Lancashire)"):
     """
     import lancs_inject
     try:
+        # Mel now saves over the covered copy we send back, so the workbook arrives
+        # already carrying a COVER tab. Strip it first, exactly as the Leyland run
+        # does — injecting on top would orphan the old sheet and its chart parts,
+        # which Excel reads as a damaged file.
+        src = Path(book)
+        bare = Path(out_dir) / ("_bare_" + src.name)
+        if lancs_inject.strip(str(src), str(bare))["removed"]:
+            book = bare
         rows = highlighted_rows(str(book)) or default_rows(str(book))
         months, data = monthly(str(book), rows)
         if not months:
@@ -394,11 +402,12 @@ def build_onto(book, out_dir, company="Fox Brothers (Lancashire)"):
         tmp = Path(out_dir) / "_cover.xlsx"
         build_cover_workbook(months, data, str(tmp),
                              sections=section_map(str(book)), company=company)
-        out = Path(out_dir) / Path(book).name
-        if out.resolve() == Path(book).resolve():
+        out = Path(out_dir) / src.name
+        if out.resolve() == src.resolve():
             raise ValueError("out_dir would overwrite the source workbook")
         lancs_inject.inject(str(book), str(tmp), str(out))
         tmp.unlink(missing_ok=True)
+        Path(bare).unlink(missing_ok=True)
         print(f"  cover rebuilt: {len(rows)} rows, {len(months)} months "
               f"({months[0]:%b %y}..{months[-1]:%b %y})")
         return out
