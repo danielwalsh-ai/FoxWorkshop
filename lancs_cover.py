@@ -152,10 +152,148 @@ def default_rows(path, sheet="DAILY", limit=200):
     return out
 
 
+# ── formula fallback ─────────────────────────────────────────────────
+# Columns written by our own XML-level fill carry formulas Excel has never
+# recalculated, so openpyxl's cached values read back as None and a freshly
+# filled month would fall off the cover charts (Paul spotted August missing,
+# 07/08/2026). This evaluates the handful of formula shapes the masters
+# actually use — SUM / AVERAGE / AVERAGEIF / COUNTIF / IFERROR, cell refs and
+# plain arithmetic — from the raw wagon values, but only when the cache is
+# empty, so workbooks Excel has saved (Mel's) behave exactly as before.
+_FUNC_RE = re.compile(r"(IFERROR|SUM|AVERAGEIF|AVERAGE|COUNTIF)\(([^()]*)\)", re.I)
+_REF_RE = re.compile(r"\$?[A-Z]{1,3}\$?[0-9]{1,7}")
+_ERR = "#ERR"
+
+
+class CellResolver:
+    """Cached value if Excel left one; otherwise evaluate the formula."""
+
+    def __init__(self, ws_formulas, ws_values):
+        self.wsf, self.wsv = ws_formulas, ws_values
+        self.memo = {}
+
+    def value(self, row, col):
+        key = (row, col)
+        if key in self.memo:
+            return self.memo[key]
+        self.memo[key] = None                     # cycle guard
+        v = self.wsv.cell(row, col).value
+        if v is None:
+            f = self.wsf.cell(row, col).value
+            if isinstance(f, str) and f.startswith("="):
+                try:
+                    v = self._eval(f[1:])
+                except Exception:
+                    v = None
+        self.memo[key] = v
+        return v
+
+    def _range(self, ref):
+        from openpyxl.utils import range_boundaries
+        ref = ref.replace("$", "").strip()
+        if "!" in ref:
+            raise ValueError("cross-sheet reference")
+        b = range_boundaries(ref if ":" in ref else f"{ref}:{ref}")
+        return [self.value(r, c)
+                for r in range(b[1], b[3] + 1) for c in range(b[0], b[2] + 1)]
+
+    @staticmethod
+    def _nums(vals):
+        return [float(v) for v in vals if isinstance(v, (int, float))]
+
+    def _call(self, name, args):
+        name = name.upper()
+        parts = [a.strip() for a in args.split(",")]
+        if name == "IFERROR":
+            if len(parts) != 2:
+                raise ValueError("IFERROR arity")
+            a, b = parts
+            if a != _ERR:
+                return a
+            return b.strip('"').strip() or _ERR   # blank fallback = no value
+        if name == "SUM":
+            vals = []
+            for p in parts:
+                if p == _ERR:
+                    return _ERR
+                if _REF_RE.fullmatch(p.replace(":", "").replace("$", "")) or ":" in p:
+                    vals += self._nums(self._range(p))
+                else:
+                    vals.append(float(p))
+            return repr(sum(vals))
+        if name == "AVERAGE":
+            vals = []
+            for p in parts:
+                vals += self._nums(self._range(p)) if not _is_number(p) else [float(p)]
+            return repr(sum(vals) / len(vals)) if vals else _ERR
+        if name == "AVERAGEIF":
+            if len(parts) != 2:
+                raise ValueError("AVERAGEIF arity")
+            crit = parts[1].strip().strip('"')
+            vals = self._nums(self._range(parts[0]))
+            if crit == "<>0":
+                vals = [v for v in vals if v != 0]
+            elif crit != "<>":
+                raise ValueError(f"AVERAGEIF criteria {crit!r}")
+            return repr(sum(vals) / len(vals)) if vals else _ERR
+        if name == "COUNTIF":
+            if len(parts) != 2:
+                raise ValueError("COUNTIF arity")
+            crit = parts[1].strip().strip('"')
+            vals = self._range(parts[0])
+            if _is_number(crit):
+                return repr(sum(1 for v in vals
+                                if isinstance(v, (int, float)) and float(v) == float(crit)))
+            return repr(sum(1 for v in vals
+                            if isinstance(v, str) and v.strip().upper() == crit.upper()))
+        raise ValueError(name)
+
+    def _eval(self, expr):
+        expr = expr.strip()
+        # a bare reference can hold text (a VOR'd wagon) — hand it back as is
+        if _REF_RE.fullmatch(expr):
+            b = expr.replace("$", "")
+            m = re.match(r"([A-Z]{1,3})([0-9]+)$", b)
+            from openpyxl.utils import column_index_from_string
+            return self.value(int(m.group(2)), column_index_from_string(m.group(1)))
+        for _ in range(30):                       # innermost call first
+            m = _FUNC_RE.search(expr)
+            if not m:
+                break
+            expr = expr[:m.start()] + str(self._call(m.group(1), m.group(2))) + expr[m.end():]
+        else:
+            raise ValueError("formula too deep")
+        if expr.strip() == _ERR:
+            return None
+        def sub_ref(m):
+            b = m.group(0).replace("$", "")
+            mm = re.match(r"([A-Z]{1,3})([0-9]+)$", b)
+            from openpyxl.utils import column_index_from_string
+            v = self.value(int(mm.group(2)), column_index_from_string(mm.group(1)))
+            if not isinstance(v, (int, float)):
+                raise ValueError(f"{b} is not numeric")
+            return repr(float(v))
+        expr = _REF_RE.sub(sub_ref, expr)
+        if _ERR in expr:
+            return None
+        if not re.fullmatch(r"[0-9.eE+\-*/() ]+", expr):
+            raise ValueError(f"unsupported formula remainder {expr!r}")
+        return eval(expr, {"__builtins__": {}})
+
+
+def _is_number(s):
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def monthly(path, rows, start=START, sheet="DAILY"):
     """{(row,label): {month_start: value}} plus the ordered month list."""
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb[sheet]
+    res = CellResolver(openpyxl.load_workbook(path)[sheet], ws)
     DATE_ROW, FIRST_DATA_COL = date_layout(ws)
     cols = {}
     for c in range(FIRST_DATA_COL, ws.max_column + 1):
@@ -168,7 +306,7 @@ def monthly(path, rows, start=START, sheet="DAILY"):
         how = agg_for(lab)
         series = {}
         for mth in months:
-            vals = [ws.cell(r, c).value for c in cols[mth]]
+            vals = [res.value(r, c) for c in cols[mth]]
             vals = [float(v) for v in vals if isinstance(v, (int, float))]
             if not vals:
                 series[mth] = None
@@ -377,23 +515,150 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None,
     return last_row, len(months)
 
 
-def build_onto(book, out_dir, company="Fox Brothers (Lancashire)"):
+AVG_SHEET = "MONTHLY AVERAGES"
+
+
+def averages_rows(path, sheet="DAILY", limit=250):
+    """[(row, display name)] for the averages tab: each category's TOTAL row,
+    the night-work total, and the fleet-wide TOTAL EARNINGS."""
+    ws = openpyxl.load_workbook(path)[sheet]
+    secs = section_map(path, sheet, limit)
+    te = night = None
+    out = []
+    for r in range(1, limit):
+        v = ws.cell(r, 1).value
+        if not isinstance(v, str) or not v.strip():
+            continue
+        up = v.strip().upper()
+        if up == "TOTAL EARNINGS" and te is None:
+            te = r
+        elif up == "NIGHT WORK" and te is None:
+            night = r                              # keep the last one before TOTAL EARNINGS
+        elif up.endswith(" TOTAL") and r in secs:
+            out.append((r, secs[r]))
+    if night:
+        out.append((night, "Night work"))
+    if te:
+        out.append((te, "Whole fleet"))
+    return out
+
+
+def monthly_daily_averages(path, rows, start=START, sheet="DAILY"):
+    """{(row,name): {month: mean of that row's non-zero daily figures}}.
+
+    Zero days are left out — a category that didn't turn a wheel on a bank
+    holiday shouldn't drag its average down."""
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb[sheet]
+    res = CellResolver(openpyxl.load_workbook(path)[sheet], ws)
+    DATE_ROW, FIRST_DATA_COL = date_layout(ws)
+    cols = {}
+    for c in range(FIRST_DATA_COL, ws.max_column + 1):
+        v = ws.cell(DATE_ROW, c).value
+        if isinstance(v, dt.datetime) and v.date() >= start:
+            cols.setdefault(dt.date(v.year, v.month, 1), []).append(c)
+    months = sorted(cols)
+    data = {}
+    for r, name in rows:
+        series = {}
+        for mth in months:
+            vals = [res.value(r, c) for c in cols[mth]]
+            vals = [float(v) for v in vals if isinstance(v, (int, float)) and v]
+            series[mth] = round(sum(vals) / len(vals), 2) if vals else None
+        data[(r, name)] = series
+    return months, data
+
+
+def build_averages_workbook(months, data, out_path, company):
+    """A standalone workbook holding just the MONTHLY AVERAGES table —
+    daily average earnings per category per month, plain numbers, no charts."""
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = AVG_SHEET
+    navy = "FF" + FOX_NAVY
+    ws.sheet_view.showGridLines = False
+
+    ws["A1"] = company
+    ws["A1"].font = Font(name="Calibri", size=20, bold=True, color=navy)
+    ws["A2"] = "Daily average earnings by month"
+    ws["A2"].font = Font(name="Calibri", size=13, color=navy)
+    ws["A3"] = ("Average per working day: each month's earnings divided by the days "
+                "that category worked. Days with nothing recorded are left out.")
+    ws["A3"].font = Font(name="Calibri", size=9, italic=True, color="FF7F7F7F")
+    ws.row_dimensions[1].height = 27
+    ws.row_dimensions[2].height = 19
+    ws.row_dimensions[4].height = 5
+
+    hdr = 5
+    rule = PatternFill("solid", fgColor="FF" + FOX_ORANGE)
+    for j in range(max(len(months) + 1, 8)):
+        ws.cell(hdr - 1, 1 + j).fill = rule
+    thin = Side(style="thin", color="FFD9D9D9")
+    edge = Border(bottom=thin)
+    hc = ws.cell(hdr, 1, "Category")
+    hc.font = Font(name="Calibri", size=10, bold=True, color="FFFFFFFF")
+    hc.fill = PatternFill("solid", fgColor=navy)
+    hc.alignment = Alignment(vertical="center")
+    for j, mth in enumerate(months):
+        c = ws.cell(hdr, 2 + j, dt.datetime(mth.year, mth.month, 1))
+        c.number_format = "mmm yy"
+        c.font = Font(name="Calibri", size=10, bold=True, color="FFFFFFFF")
+        c.fill = PatternFill("solid", fgColor=navy)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[hdr].height = 20
+
+    band = PatternFill("solid", fgColor="FFF4F6F9")
+    for i, ((r, name), series) in enumerate(data.items()):
+        rr = hdr + 1 + i
+        whole_fleet = name == "Whole fleet"
+        nc = ws.cell(rr, 1, name)
+        nc.font = Font(name="Calibri", size=9.5, bold=True, color="FF262626")
+        nc.border = edge
+        for j, mth in enumerate(months):
+            cell = ws.cell(rr, 2 + j, series.get(mth))
+            cell.number_format = "£#,##0;-£#,##0;\"–\""
+            cell.font = Font(name="Calibri", size=9.5, bold=whole_fleet, color="FF262626")
+            cell.alignment = Alignment(horizontal="right")
+            cell.border = edge
+        if whole_fleet:
+            for j in range(len(months) + 1):
+                ws.cell(rr, 1 + j).fill = PatternFill("solid", fgColor="FFEAEDF3")
+        elif i % 2:
+            for j in range(len(months) + 1):
+                ws.cell(rr, 1 + j).fill = band
+
+    ws.column_dimensions["A"].width = 24
+    for j in range(len(months)):
+        ws.column_dimensions[get_column_letter(2 + j)].width = 11
+    wb.save(out_path)
+
+
+def build_onto(book, out_dir, company="Fox Brothers (Lancashire)", averages=False):
     """Rebuild the cover tab onto `book` and hand back the covered copy.
 
     Same filename as the original, so whoever owns the master carries on saving
-    over their own file. Returns None on failure — the daily report still goes
-    out; a cover problem shouldn't hold up the numbers.
+    over their own file. With averages=True a MONTHLY AVERAGES tab (daily average
+    per category per month — Paul asked, 07/08/2026) goes in as well. Returns
+    None on failure — the daily report still goes out; a cover problem shouldn't
+    hold up the numbers.
     """
     import lancs_inject
     try:
-        # Mel now saves over the covered copy we send back, so the workbook arrives
-        # already carrying a COVER tab. Strip it first, exactly as the Leyland run
-        # does — injecting on top would orphan the old sheet and its chart parts,
-        # which Excel reads as a damaged file.
+        # The masters round-trip through our own email, so they arrive already
+        # carrying our tabs. Strip them first, exactly as the Leyland run always
+        # did for the cover — injecting on top would orphan the old sheet and its
+        # chart parts, which Excel reads as a damaged file.
         src = Path(book)
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
         bare = Path(out_dir) / ("_bare_" + src.name)
         if lancs_inject.strip(str(src), str(bare))["removed"]:
             book = bare
+        bare2 = Path(out_dir) / ("_bare2_" + src.name)
+        if lancs_inject.strip(str(book), str(bare2), sheet_name=AVG_SHEET)["removed"]:
+            book = bare2
         rows = highlighted_rows(str(book)) or default_rows(str(book))
         months, data = monthly(str(book), rows)
         if not months:
@@ -405,9 +670,26 @@ def build_onto(book, out_dir, company="Fox Brothers (Lancashire)"):
         out = Path(out_dir) / src.name
         if out.resolve() == src.resolve():
             raise ValueError("out_dir would overwrite the source workbook")
+
+        # The averages tab goes in FIRST: each inject marks its own sheet as the
+        # selected one, and Excel opens on tabSelected — the cover must win.
+        if averages:
+            avg_rows = averages_rows(str(book))
+            if avg_rows:
+                m2, d2 = monthly_daily_averages(str(book), avg_rows)
+                avg_tmp = Path(out_dir) / "_averages.xlsx"
+                build_averages_workbook(m2, d2, str(avg_tmp), company=company)
+                mid = Path(out_dir) / ("_mid_" + src.name)
+                lancs_inject.inject(str(book), str(avg_tmp), str(mid),
+                                    sheet_name=AVG_SHEET, first=False)
+                book = mid
+                avg_tmp.unlink(missing_ok=True)
+                print(f"  averages tab: {len(avg_rows)} categories, {len(m2)} months")
+
         lancs_inject.inject(str(book), str(tmp), str(out))
         tmp.unlink(missing_ok=True)
-        Path(bare).unlink(missing_ok=True)
+        for leftover in ("_bare_", "_bare2_", "_mid_"):
+            (Path(out_dir) / (leftover + src.name)).unlink(missing_ok=True)
         print(f"  cover rebuilt: {len(rows)} rows, {len(months)} months "
               f"({months[0]:%b %y}..{months[-1]:%b %y})")
         return out

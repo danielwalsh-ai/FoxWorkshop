@@ -40,7 +40,7 @@ from datetime import date, datetime, timedelta
 
 from lxml import etree
 import openpyxl
-from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 from openpyxl.formula.translate import Translator
 
 NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
@@ -262,6 +262,39 @@ class SheetXmlEditor:
         if dim is not None:
             dim.set('ref', re.sub(r':[A-Z]+(\d+)$', rf':{colletter}\1', dim.get('ref')))
 
+    def extend_conditional_formatting(self, target_col):
+        """Pull the sheet's conditional-formatting frontier out to a new column.
+
+        The green over-target shading is conditional formatting whose ranges end
+        wherever finance last dragged them (column OP, 31 July, when Paul spotted
+        3rd/4th August uncoloured). Any range that reaches that shared frontier is
+        treated as live and extended to the new column; ranges that stop short are
+        historical patches and are left alone."""
+        cfs = self.tree.findall(q('conditionalFormatting'))
+        ends = []
+        for cf in cfs:
+            for part in (cf.get('sqref') or '').split():
+                ends.append(range_boundaries(part)[2])
+        if not ends:
+            return 0
+        frontier = max(ends)
+        if target_col <= frontier:
+            return 0
+        n = 0
+        for cf in cfs:
+            parts, changed = [], False
+            for part in (cf.get('sqref') or '').split():
+                mn_c, mn_r, mx_c, mx_r = range_boundaries(part)
+                if mx_c == frontier:
+                    part = (f"{get_column_letter(mn_c)}{mn_r}:"
+                            f"{get_column_letter(target_col)}{mx_r}")
+                    changed = True
+                    n += 1
+                parts.append(part)
+            if changed:
+                cf.set('sqref', ' '.join(parts))
+        return n
+
     def mirror_format(self, src_letter, tgt_letter):
         """Give the target column the source column's cell styles on any row the
         fill left empty — so a newly-extended column keeps the sheet's borders."""
@@ -386,6 +419,9 @@ def fill_master(master, daily, transactions, out, date_override=None, value_col=
         ed.write(layout.tyres, TL, value=round(tyres, 2), style=ed.style_of(layout.tyres, src_col_letter))
     ed.mirror_format(src_col_letter, TL)   # borders on any rows the fill left empty
     ed.fix_dimension(TL)
+    cf_extended = ed.extend_conditional_formatting(target_col)
+    if cf_extended:
+        print(f"  conditional formatting: {cf_extended} range(s) extended to {TL}")
 
     # repackage preserving everything else; force recalc on open, drop calcChain
     wb_tree = etree.fromstring(zin.read('xl/workbook.xml'))

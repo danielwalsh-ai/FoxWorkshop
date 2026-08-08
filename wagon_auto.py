@@ -290,12 +290,17 @@ def ensure_master(tmpdir, state):
     if not found:
         return False
     STATE_DIR.mkdir(exist_ok=True)
-    # What comes back from Gmail is the copy Paul got, so it already has a cover.
-    # Work from a clean master and add exactly one cover at send time.
+    # What comes back from Gmail is the copy Paul got, so it already carries our
+    # tabs. Work from a clean master and add them back fresh at send time.
     bare = Path(tmpdir) / "bare.xlsx"
     if lancs_inject.strip(str(found), str(bare))["removed"]:
         print("  removed the previous cover tab before filling")
         found = bare
+    bare2 = Path(tmpdir) / "bare2.xlsx"
+    if lancs_inject.strip(str(found), str(bare2),
+                          sheet_name=lancs_cover.AVG_SHEET)["removed"]:
+        print("  removed the previous averages tab before filling")
+        found = bare2
     shutil.copy(found, MASTER_FILE)
     state["watermark"] = when.isoformat()
     # Persist immediately. If this run finds nothing new it returns early, and a later
@@ -915,7 +920,8 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
         cover_dir = Path(tmp) / "covered"
         cover_dir.mkdir(exist_ok=True)
         covered = lancs_cover.build_onto(final, cover_dir,
-                                         company="Fox Brothers (Leyland)")
+                                         company="Fox Brothers (Leyland)",
+                                         averages=True)
         fname = send(final, results, note, dry_run, to_me=to_me, workbook=covered)
 
         if rejected:      # good days went to Paul; the data issue is Daniel's to chase
