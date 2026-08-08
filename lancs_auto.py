@@ -37,7 +37,15 @@ HERE = Path(__file__).parent
 STATE_DIR = HERE / "state"
 STATE_FILE = STATE_DIR / "lancs_auto.json"
 
-MEL = "mel@foxbrothers.co.uk"
+# Mel normally sends the master, but others cover when she is away — Katie
+# Ellison sent it on 07/08/2026 by replying on Mel's thread. This list only says
+# whose mail is worth opening; the subject match and the plausibility checks in
+# validate() do the real guarding. NOT Katie Ward or Emmy — they send the
+# *Leyland* run sheets, a separate business.
+SENDERS = {
+    "mel@foxbrothers.co.uk",          # Mel Vose
+    "katie@foxbrothers.co.uk",        # Katie Ellison — covers when Mel is away
+}
 # Mel renamed her file on 04/08/2026: she now saves over the covered copy we send
 # back, so the subject became "Mel master WITH COVER v9.xlsx". Accept either name,
 # and don't pin the version number — it will move if she saves it as something new.
@@ -90,21 +98,27 @@ def _connect():
 
 
 def fetch_mel(tmpdir, since_days=10, wanted=None):
-    """Headers first; the workbook is ~2MB so only download what's new."""
+    """Headers first; the workbook is ~2MB so only download what's new.
+
+    Searched on subject, senders filtered here — an IMAP OR chain over several
+    FROM addresses is unreliable, and covers send on Mel's thread anyway."""
     M = _connect()
     try:
         M.select("INBOX")
         since = (dt.date.today() - dt.timedelta(days=since_days)).strftime("%d-%b-%Y")
-        typ, data = M.search(None, f'(SINCE "{since}" FROM "{MEL}")')
+        typ, data = M.search(None, f'(SINCE "{since}" SUBJECT "master")')
         heads = []
         for uid in data[0].split():
-            typ, md = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE SUBJECT)])")
+            typ, md = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE SUBJECT FROM)])")
             if not md or not md[0]:
                 continue
             h = email.message_from_bytes(md[0][1])
+            sender = (email.utils.parseaddr(h.get("From", ""))[1] or "").lower()
             subj = str(email.header.make_header(
                 email.header.decode_header(h.get("Subject", ""))))
             low = subj.lower()
+            if sender not in SENDERS:
+                continue
             if not any(s in low for s in SUBJECT_MATCHES) or low.startswith("recall"):
                 continue
             raw = h.get("Date")
