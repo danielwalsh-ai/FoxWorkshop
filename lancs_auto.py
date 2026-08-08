@@ -324,6 +324,17 @@ def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False):
         print(f"{len(new)} new email(s) from Mel; using "
               f"{msg['date']:%Y-%m-%d %H:%M}  {msg['subject']}")
         book = msg["files"][-1]
+        # Flat £700 green across every category (Paul, 08/08/2026). Done on the
+        # incoming copy so the master we send back carries it, and it sticks
+        # when the office saves over our copy. Same filename — the covered
+        # attachment keeps the name whoever sent it used.
+        norm_dir = Path(tmp) / "norm"
+        norm_dir.mkdir(exist_ok=True)
+        norm = norm_dir / Path(book).name
+        fixed = lancs_inject.set_green_thresholds(str(book), str(norm))
+        if fixed["changed"]:
+            print(f"  over-target green: {fixed['changed']} threshold(s) set to 700")
+        book = norm
         pack_dir = Path(out_dir) if out_dir else Path(tmp)
         pack_dir.mkdir(parents=True, exist_ok=True)
         tmp_pdf = Path(tmp) / "pack.pdf"

@@ -44,6 +44,54 @@ def _select(xml):
     return re.sub(rb"(<sheetView\b)", rb'\1 tabSelected="1"', _deselect(xml), count=1)
 
 
+def set_green_thresholds(master_path, out_path, threshold=700, sheet="DAILY"):
+    """Flatten the over-target green to one figure across every category.
+
+    Paul's call (08/08/2026): a wagon earning £700 or over on the day goes green,
+    full stop. Historically each block had its own band (EVs 600, White Volvos
+    500/700, Artics 800, Tipworx 600), so a £750 artic never coloured. This
+    rewrites every numeric cellIs threshold rule on the DAILY tab — both the
+    green >= rule and its paired < rule — to the flat figure. The pack's
+    under-target numbers are untouched: those targets are hardcoded in
+    lancs_data.CATEGORIES, not read from the formatting.
+    """
+    z = zipfile.ZipFile(master_path)
+    wbx = z.read("xl/workbook.xml").decode()
+    rels = z.read("xl/_rels/workbook.xml.rels").decode()
+    rid = re.search(rf'<sheet[^>]*name="{sheet}"[^>]*r:id="(rId\d+)"', wbx).group(1)
+    part = "xl/" + re.search(
+        rf'<Relationship[^>]*Id="{rid}"[^>]*Target="([^"]+)"', rels).group(1).lstrip("/")
+    tree = etree.fromstring(z.read(part))
+    changed = 0
+    for cf in tree.findall(Q("conditionalFormatting")):
+        for rule in cf.findall(Q("cfRule")):
+            if rule.get("type") != "cellIs":
+                continue
+            if rule.get("operator") not in ("greaterThanOrEqual", "lessThan"):
+                continue
+            f = rule.find(Q("formula"))
+            if f is None or f.text is None:
+                continue
+            try:
+                cur = float(f.text)
+            except ValueError:
+                continue                      # the "vor" text rule — leave alone
+            if cur != threshold:
+                f.text = str(threshold)
+                changed += 1
+    if not changed:
+        z.close()
+        if str(master_path) != str(out_path):
+            shutil.copyfile(master_path, out_path)
+        return {"changed": 0}
+    data = etree.tostring(tree, xml_declaration=True, encoding="UTF-8", standalone=True)
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zo:
+        for item in z.infolist():
+            zo.writestr(item, data if item.filename == part else z.read(item.filename))
+    z.close()
+    return {"changed": changed}
+
+
 def _merge_styles(master_xml, cover_xml):
     """Append the cover's styles to the master's; return (new xml, index offset)."""
     mroot = etree.fromstring(master_xml)
