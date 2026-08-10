@@ -1004,7 +1004,8 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
         if out_dir:
             Path(out_dir).mkdir(parents=True, exist_ok=True)
             dest = Path(out_dir) / fname
-            shutil.copy(final, dest)
+            # what Paul actually receives — the covered copy when there is one
+            shutil.copy(covered if covered and Path(covered).exists() else final, dest)
             print(f"  copied to {dest}")
     return 0
 
