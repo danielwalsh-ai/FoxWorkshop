@@ -714,8 +714,64 @@ def rows_html(results):
     return "\n".join(out)
 
 
+# Paul's names for the blocks, in the order he listed them (08/08/2026). Nights
+# is a total, not an average — four wagons and a category row, an average there
+# means nothing. Hooks on hire is one wagon on hire, deliberately not shown.
+SECTION_DISPLAY = [("HOOKS", "Hooks", "avg"), ("8W", "8x4", "avg"),
+                   ("ALLY BODY", "Alloys", "avg"), ("ARTICS", "Artics", "avg"),
+                   ("GRABS", "Grabs", "avg"), ("SWEEPER", "Sweepers", "avg"),
+                   ("8W SLEEPERS", "Sleepers", "avg"),
+                   ("ARTIC - NIGHT WORK - BREAKDOWN", "Nights total", "sum")]
+
+
+def section_averages(master, day):
+    """[(display name, £value or None)] for one day — the block averages Paul
+    forwards on. Read straight off the wagon rows, which are literal values."""
+    wb = openpyxl.load_workbook(str(master), data_only=True)
+    ws = wb["DAILY"]
+    lay = detect_layout(ws)
+    col = next((c for c in range(3, ws.max_column + 2)
+                if isinstance(ws.cell(2, c).value, dt.datetime)
+                and ws.cell(2, c).value.date() == day), None)
+    if col is None:
+        return []
+    blocks = {name: (a, b) for name, a, b in lay.blocks}
+    out = []
+    for block, shown, how in SECTION_DISPLAY:
+        a, b = blocks[block]
+        vals = [float(v) for r in range(a, b + 1)
+                if isinstance((v := ws.cell(r, col).value), (int, float))]
+        if not vals:
+            out.append((shown, None))
+        elif how == "sum":
+            out.append((shown, sum(vals)))
+        else:
+            out.append((shown, sum(vals) / len(vals)))
+    return out
+
+
+def sections_html(secs, day):
+    rows = "\n".join(
+        f'<tr><td>{shown}</td><td align="right">'
+        + (f"£{v:,.0f}" if v is not None else "—") + "</td></tr>"
+        for shown, v in secs)
+    return f"""
+      <p style="margin-bottom:4px"><b>Section averages — {day:%a} {day.day} {day:%b}</b></p>
+      <table cellpadding="6" style="border-collapse:collapse;font-size:14px">
+        <tr style="background:#24214a;color:#fff">
+          <th align="left">Section</th><th align="right">Per wagon</th>
+        </tr>
+        {rows}
+      </table>"""
+
+
 def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
     last = max(dt.date.fromisoformat(r["date"]) for r in results)
+    try:
+        secs = section_averages(final_path, last)
+    except Exception as e:
+        print(f"  ! section averages failed ({e}) — sending without them")
+        secs = []
     fname = master_filename(last)
     # The covered copy is what Paul gets; the plain one stays as our stored master.
     attach = workbook if workbook and Path(workbook).exists() else final_path
@@ -731,6 +787,7 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
         </tr>
         {rows_html(results)}
       </table>
+      {sections_html(secs, last) if secs else ''}
       <p style="font-size:13px;color:#666">Master attached, updated to
          {ordinal(last.day)} {last:%B}.{cover}</p>
       <hr style="border:none;border-top:1px solid #ccc">
@@ -741,6 +798,10 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
         f"{dt.date.fromisoformat(r['date']):%a} {dt.date.fromisoformat(r['date']).day} "
         f"{dt.date.fromisoformat(r['date']):%b}: "
         f"£{r['expected_total_earnings']:,.2f}" for r in results)
+    if secs:
+        plain += (f"\n\nSection averages — {last:%a} {last.day} {last:%b}\n"
+                  + "\n".join(f"{shown}: " + (f"£{v:,.0f}" if v is not None else "—")
+                              for shown, v in secs))
 
     # --to-me proves the whole path (fill, tidy, commentary, SMTP, attachment)
     # without anything reaching Paul.

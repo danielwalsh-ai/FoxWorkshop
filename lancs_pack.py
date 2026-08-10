@@ -545,7 +545,7 @@ def build(master_path, out, focus=None, reports_dir=None, commentary=True):
     c.showPage()
     c.save()
     return {"focus": day, "days": days, "kpis": k, "off": off,
-            "under": len(under), "out": str(out)}
+            "under": len(under), "cats": m.category_averages(day), "out": str(out)}
 
 
 def page_notes(m, day, days, k, off, facts, use_ai=True):

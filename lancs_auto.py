@@ -151,6 +151,17 @@ def fetch_mel(tmpdir, since_days=10, wanted=None):
             pass
 
 
+def sections_text(r):
+    """Per-section average per wagon on the day — Paul forwards these on
+    (asked 08/08/2026, for both masters)."""
+    cats = r.get("cats") or []
+    if not cats:
+        return ""
+    return (f"Average per wagon by section:\n" + "\n".join(
+        f"  {c['name']}: " + (money(round(c["avg"])) if c["avg"] else "-")
+        for c in cats) + "\n\n")
+
+
 def body_text(r):
     k, off = r["kpis"], r["off"]
     d = r["focus"]
@@ -165,6 +176,7 @@ def body_text(r):
         f"Wagons under target: {k['under_target']} of {k['in_service']} in service\n"
         f"Wagons off the road on the day: {int(k['off_road'] or 0)}\n"
         f"Wagon-days lost in the last 7 trading days: {int(k['wagon_days_lost'] or 0)}\n\n"
+        + sections_text(r) +
         "Full breakdown in the attached PDF, and the master with the cover sheet "
         "is attached alongside it.\n\n"
         f"{SIGN_OFF}\n")
@@ -173,6 +185,20 @@ def body_text(r):
 def body_html(r):
     k = r["kpis"]
     d = r["focus"]
+    cats = r.get("cats") or []
+    sections = ""
+    if cats:
+        rows = "\n".join(
+            f'<tr><td>{c["name"]}</td><td align="right">'
+            + (money(round(c["avg"])) if c["avg"] else "-") + "</td></tr>"
+            for c in cats)
+        sections = f"""
+<p style="margin-bottom:4px"><b>Average per wagon by section</b></p>
+<table cellpadding="6" style="border-collapse:collapse;font-size:14px">
+<tr style="background:#24214a;color:#fff">
+<th align="left">Section</th><th align="right">Per wagon</th></tr>
+{rows}
+</table>"""
     return f"""<html><body>
 <p>Hi All,</p>
 <p>Today's Lancashire daily wagon earnings pack for {d:%a} {d.day} {d:%b %Y} is attached.</p>
@@ -183,6 +209,7 @@ Rolling 5-day average: {money(k['rolling_5day'])}<br>
 Wagons under target: {k['under_target']} of {k['in_service']} in service<br>
 Wagons off the road on the day: {int(k['off_road'] or 0)}<br>
 Wagon-days lost in the last 7 trading days: {int(k['wagon_days_lost'] or 0)}</p>
+{sections}
 <p>Full breakdown in the attached PDF, and the master with the cover sheet is attached alongside it.</p>
 <p>{SIGN_OFF}</p>
 </body></html>"""
