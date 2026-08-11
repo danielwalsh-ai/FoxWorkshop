@@ -71,8 +71,21 @@ FLEET_MATCH_MIN = 0.70            # a real Leyland sheet scores 100%; Lancashire
 # Our own outgoing subject also contains "Wagon earnings"; never re-ingest it.
 OWN_SUBJECT = "master updated to"
 SEND_TO = ["paulfox@foxbrothers.co.uk"]
+# Paul's own forward list, as he sent it on 11/08/2026 asking for everyone to be
+# copied each day. Kept as Cc so the report still reads as going to Paul.
 SEND_CC = ["daniel.walsh@kfltd.uk",
-           "reports@foxgroup.co"]      # Paul's shared reports box, set up 05/08/2026
+           "reports@foxgroup.co",           # Paul's shared reports box, 05/08/2026
+           "samuel@foxbrothers.co.uk",      # Samuel Hardy
+           "john.flood@foxbrothers.co.uk",  # John Flood
+           "darren@foxbrothers.co.uk",      # Darren
+           "mike.yates@foxgroup.co",        # Mike Yates
+           "barry.hope@foxgroup.co",        # Barry Hope
+           "Josh@hurtplant.co.uk",
+           "darrenr@hurtplant.co.uk",
+           "mark@hurtplant.co.uk",
+           "caroline@hurtplant.co.uk",
+           "jb@hurtplant.co.uk",
+           "michael.reynolds@hurtplant.co.uk"]
 MODEL = "claude-sonnet-5"
 
 # Rows are never addressed by number — wagon_master_fill.detect_layout finds every
@@ -724,45 +737,97 @@ SECTION_DISPLAY = [("HOOKS", "Hooks", "avg"), ("8W", "8x4", "avg"),
                    ("ARTIC - NIGHT WORK - BREAKDOWN", "Nights total", "sum")]
 
 
+# Paul's bands for a per-wagon average (11/08/2026): £700 or over is green,
+# within £100 of it amber, under £600 red.
+TARGET_PER_WAGON = 700.0
+BAND_GREEN, BAND_AMBER, BAND_RED = "#0b7a3b", "#b7791f", "#b42318"
+BAND_BG = {"green": "#e6f4ea", "amber": "#fdf3e2", "red": "#fdeceb"}
+
+
+def band(v):
+    """green / amber / red for a per-wagon average, or None if not applicable."""
+    if v is None:
+        return None
+    if v >= TARGET_PER_WAGON:
+        return "green"
+    if v >= TARGET_PER_WAGON - 100:
+        return "amber"
+    return "red"
+
+
 def section_averages(master, day):
-    """[(display name, £value or None)] for one day — the block averages Paul
-    forwards on. Read straight off the wagon rows, which are literal values."""
+    """[(name, day average, month-to-date average)] — the per-wagon figures Paul
+    forwards on. Read straight off the wagon rows, which are literal values.
+
+    Month to date averages every trading day of that month so far, weighted by
+    wagons out: a day with half the fleet parked shouldn't count as a full day.
+    """
     wb = openpyxl.load_workbook(str(master), data_only=True)
     ws = wb["DAILY"]
     lay = detect_layout(ws)
-    col = next((c for c in range(3, ws.max_column + 2)
-                if isinstance(ws.cell(2, c).value, dt.datetime)
-                and ws.cell(2, c).value.date() == day), None)
+    cols, col = {}, None
+    for c in range(3, ws.max_column + 2):
+        v = ws.cell(2, c).value
+        if isinstance(v, dt.datetime):
+            d = v.date()
+            if d.year == day.year and d.month == day.month and d <= day:
+                cols[d] = c
+            if d == day:
+                col = c
     if col is None:
         return []
     blocks = {name: (a, b) for name, a, b in lay.blocks}
     out = []
     for block, shown, how in SECTION_DISPLAY:
         a, b = blocks[block]
-        vals = [float(v) for r in range(a, b + 1)
-                if isinstance((v := ws.cell(r, col).value), (int, float))]
-        if not vals:
-            out.append((shown, None))
-        elif how == "sum":
-            out.append((shown, sum(vals)))
-        else:
-            out.append((shown, sum(vals) / len(vals)))
+
+        def figures(c):
+            return [float(v) for r in range(a, b + 1)
+                    if isinstance((v := ws.cell(r, c).value), (int, float))]
+
+        today = figures(col)
+        day_val = (sum(today) if how == "sum"
+                   else (sum(today) / len(today) if today else None)) if today else None
+        # month to date: pool every day's wagon figures, so the average is per
+        # wagon-day rather than an average of averages.
+        pool, day_totals = [], []
+        for c in cols.values():
+            f = figures(c)
+            if f:
+                pool.extend(f)
+                day_totals.append(sum(f))
+        mtd = (sum(day_totals) / len(day_totals) if how == "sum"
+               else (sum(pool) / len(pool))) if pool else None
+        out.append((shown, day_val, mtd))
     return out
 
 
 def sections_html(secs, day):
-    rows = "\n".join(
-        f'<tr><td>{shown}</td><td align="right">'
-        + (f"£{v:,.0f}" if v is not None else "—") + "</td></tr>"
-        for shown, v in secs)
+    cells = []
+    for shown, v, mtd in secs:
+        tds = []
+        for value in (v, mtd):
+            bd = band(value) if "total" not in shown.lower() else None
+            style = (f'background:{BAND_BG[bd]};color:'
+                     f'{ {"green": BAND_GREEN, "amber": BAND_AMBER, "red": BAND_RED}[bd] };'
+                     'font-weight:bold') if bd else ""
+            tds.append(f'<td align="right" style="{style}">'
+                       + (f"£{value:,.0f}" if value is not None else "—") + "</td>")
+        cells.append(f"<tr><td>{shown}</td>{''.join(tds)}</tr>")
+    rows = "\n".join(cells)
     return f"""
-      <p style="margin-bottom:4px"><b>Section averages — {day:%a} {day.day} {day:%b}</b></p>
+      <p style="margin-bottom:4px"><b>Average per wagon — {day:%a} {day.day} {day:%b}</b></p>
       <table cellpadding="6" style="border-collapse:collapse;font-size:14px">
         <tr style="background:#24214a;color:#fff">
-          <th align="left">Section</th><th align="right">Per wagon</th>
+          <th align="left">Section</th><th align="right">On the day</th>
+          <th align="right">Month to date</th>
         </tr>
         {rows}
-      </table>"""
+      </table>
+      <p style="font-size:12px;color:#666;margin-top:4px">
+        Green £{TARGET_PER_WAGON:,.0f} or over &nbsp;·&nbsp;
+        Amber £{TARGET_PER_WAGON-100:,.0f}–£{TARGET_PER_WAGON-1:,.0f} &nbsp;·&nbsp;
+        Red under £{TARGET_PER_WAGON-100:,.0f}</p>"""
 
 
 def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
@@ -799,9 +864,14 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
         f"{dt.date.fromisoformat(r['date']):%b}: "
         f"£{r['expected_total_earnings']:,.2f}" for r in results)
     if secs:
-        plain += (f"\n\nSection averages — {last:%a} {last.day} {last:%b}\n"
-                  + "\n".join(f"{shown}: " + (f"£{v:,.0f}" if v is not None else "—")
-                              for shown, v in secs))
+        plain += (f"\n\nAverage per wagon — {last:%a} {last.day} {last:%b} "
+                  f"(month to date in brackets)\n"
+                  + "\n".join(
+                      f"{shown}: " + (f"£{v:,.0f}" if v is not None else "—")
+                      + (f" (£{mtd:,.0f})" if mtd is not None else "")
+                      + (f"  {band(v).upper()}" if band(v)
+                         and "total" not in shown.lower() else "")
+                      for shown, v, mtd in secs))
 
     # --to-me proves the whole path (fill, tidy, commentary, SMTP, attachment)
     # without anything reaching Paul.
