@@ -202,6 +202,121 @@ def master_state(path):
     return 'xl/' + target, date_cols, last_date_col, last_pop_col, regs, ws, wsv, layout
 
 
+# Paul's traffic lights on the DAILY tab itself (12/08/2026): every wagon cell in
+# a section block goes green at £700 or over, amber within £100 of it, red under
+# £600. Solid fills, matching the green the sheet already used.
+BAND_FILLS = [("green", "FF00B050", "FFFFFFFF"),
+              ("amber", "FFFFC000", "FF7F6000"),
+              ("red", "FFFF0000", "FFFFFFFF")]
+BAND_TESTS = ["AND(ISNUMBER({c}),{c}>=700)",
+              "AND(ISNUMBER({c}),{c}>=600,{c}<700)",
+              "AND(ISNUMBER({c}),{c}<600)"]
+
+
+def apply_section_bands(path, out_path):
+    """Traffic-light every wagon cell in every section block on DAILY.
+
+    ISNUMBER guards each test so blanks and text ('VOR', 'MN') are left alone —
+    without it Excel reads an empty cell as zero and paints the whole sheet red.
+    The rules take the top three priorities and stopIfTrue, so they win over the
+    older per-block bands without those having to be deleted. Ranges are drawn
+    out to the existing conditional-formatting frontier, which means the daily
+    fill's extend_conditional_formatting carries them onto each new day.
+    """
+    z = zipfile.ZipFile(path)
+    wbx = z.read('xl/workbook.xml').decode()
+    rels = z.read('xl/_rels/workbook.xml.rels').decode()
+    rid = re.search(r'<sheet[^>]*name="DAILY"[^>]*r:id="(rId\d+)"', wbx).group(1)
+    part = 'xl/' + re.search(
+        rf'<Relationship[^>]*Id="{rid}"[^>]*Target="([^"]+)"', rels).group(1).lstrip('/')
+
+    layout = detect_layout(openpyxl.load_workbook(path)['DAILY'])
+    sheet = z.read(part).decode()
+
+    # ── styles: append one dxf per band ──────────────────────────────
+    styles = z.read('xl/styles.xml').decode()
+    m = re.search(r'<dxfs count="(\d+)"', styles)
+    if m:
+        base = int(m.group(1))
+        add = "".join(
+            f'<dxf><font><color rgb="{fg}"/></font><fill><patternFill>'
+            f'<bgColor rgb="{bg}"/></patternFill></fill></dxf>'
+            for _n, bg, fg in BAND_FILLS)
+        styles = styles.replace(m.group(0), f'<dxfs count="{base + len(BAND_FILLS)}"', 1)
+        styles = re.sub(r'</dxfs>', add + '</dxfs>', styles, count=1)
+    else:                                   # no dxfs element at all — create one
+        base = 0
+        add = "".join(
+            f'<dxf><font><color rgb="{fg}"/></font><fill><patternFill>'
+            f'<bgColor rgb="{bg}"/></patternFill></fill></dxf>'
+            for _n, bg, fg in BAND_FILLS)
+        styles = styles.replace(
+            '</styleSheet>', f'<dxfs count="{len(BAND_FILLS)}">{add}</dxfs></styleSheet>')
+
+    tree = etree.fromstring(sheet.encode())
+    # Drop any bands a previous run left. The master round-trips through Paul's
+    # inbox on the recovery path, so without this the rules would stack up.
+    for cf in tree.findall(q('conditionalFormatting')):
+        rules = cf.findall(q('cfRule'))
+        if rules and all(
+                r.get('type') == 'expression'
+                and (r.find(q('formula')) is not None)
+                and 'ISNUMBER' in (r.find(q('formula')).text or '')
+                for r in rules):
+            cf.getparent().remove(cf)
+    existing = tree.findall(q('conditionalFormatting'))
+    ends = []
+    for cf in existing:
+        for p in (cf.get('sqref') or '').split():
+            ends.append(range_boundaries(p)[2])
+    # the frontier the daily fill maintains; fall back to the last date column
+    frontier = max(ends) if ends else None
+    if frontier is None:
+        wsv = openpyxl.load_workbook(path, data_only=True)['DAILY']
+        frontier = max(c for c in range(3, wsv.max_column + 2)
+                       if isinstance(wsv.cell(DATE_ROW, c).value, datetime))
+    # Priorities are unique across the whole sheet, so every existing rule drops
+    # by the number we are about to add and ours take 1..N. Duplicated priorities
+    # are one of the things Excel silently "repairs".
+    incoming = len(layout.blocks) * len(BAND_FILLS)
+    for rule in tree.iter(q('cfRule')):
+        p = rule.get('priority')
+        if p is not None:
+            rule.set('priority', str(int(p) + incoming))
+
+    anchor_after = existing[-1] if existing else tree.find(q('sheetData'))
+    first_col = get_column_letter(3)
+    made = priority = 0
+    for _name, a, b in layout.blocks:
+        sqref = f"{first_col}{a}:{get_column_letter(frontier)}{b}"
+        cf = etree.Element(q('conditionalFormatting'))
+        cf.set('sqref', sqref)
+        for i, test in enumerate(BAND_TESTS):
+            priority += 1
+            rule = etree.SubElement(cf, q('cfRule'))
+            rule.set('type', 'expression')
+            rule.set('dxfId', str(base + i))
+            rule.set('priority', str(priority))
+            rule.set('stopIfTrue', '1')
+            etree.SubElement(rule, q('formula')).text = test.format(
+                c=f"{first_col}{a}")
+        anchor_after.addnext(cf)
+        anchor_after = cf
+        made += 1
+
+    data = etree.tostring(tree, xml_declaration=True, encoding='UTF-8', standalone=True)
+    with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zo:
+        for item in z.infolist():
+            if item.filename == part:
+                zo.writestr(item, data)
+            elif item.filename == 'xl/styles.xml':
+                zo.writestr(item, styles.encode())
+            else:
+                zo.writestr(item, z.read(item.filename))
+    z.close()
+    return {"blocks": made, "to_column": get_column_letter(frontier)}
+
+
 def col_for_date(date_cols, last_date_col, target):
     """Exact date match in row 2 wins; otherwise extend past the last date column.
     The master's date row has occasional skipped days, so never assume consecutiveness."""

@@ -45,7 +45,7 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 
 from wagon_master_fill import (fill_master, master_state, read_transaction_report,
-                               SheetXmlEditor, detect_layout)
+                               SheetXmlEditor, detect_layout, apply_section_bands)
 import tidy_master
 import lancs_cover                  # Paul wants the same cover tab on both masters
 import lancs_inject
@@ -1050,7 +1050,18 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
         # writing it alongside `final` would mean reading and writing one file.
         cover_dir = Path(tmp) / "covered"
         cover_dir.mkdir(exist_ok=True)
-        covered = lancs_cover.build_onto(final, cover_dir,
+        # Traffic lights on the DAILY section blocks (Paul, 12/08/2026). Applied
+        # to the outgoing copy only — our stored master stays clean, so each run
+        # bands a fresh file rather than layering onto yesterday's rules.
+        banded = final
+        try:
+            b = Path(tmp) / ("banded_" + Path(final).name)
+            info = apply_section_bands(str(final), str(b))
+            banded = b
+            print(f"  section bands: {info['blocks']} blocks to column {info['to_column']}")
+        except Exception as e:
+            print(f"  ! section bands failed ({e}) — sending without them")
+        covered = lancs_cover.build_onto(banded, cover_dir,
                                          company="Fox Brothers (Leyland)",
                                          averages=True)
         fname = send(final, results, note, dry_run, to_me=to_me, workbook=covered)
