@@ -212,8 +212,38 @@ BAND_TESTS = ["AND(ISNUMBER({c}),{c}>=700)",
               "AND(ISNUMBER({c}),{c}>=600,{c}<700)",
               "AND(ISNUMBER({c}),{c}<600)"]
 
+# The same bands as words and web colours, for the daily emails. Kept here so
+# Leyland and Lancashire cannot drift apart.
+TARGET_PER_WAGON = 700.0
+BAND_TEXT = {"green": "#0b7a3b", "amber": "#b7791f", "red": "#b42318"}
+BAND_BG = {"green": "#e6f4ea", "amber": "#fdf3e2", "red": "#fdeceb"}
 
-def apply_section_bands(path, out_path):
+
+def band(v):
+    """green / amber / red for a per-wagon average, or None if not applicable."""
+    if v is None:
+        return None
+    if v >= TARGET_PER_WAGON:
+        return "green"
+    if v >= TARGET_PER_WAGON - 100:
+        return "amber"
+    return "red"
+
+
+def band_cell(value, plain=False):
+    """One table cell, shaded by band. plain=True gives the text-only form."""
+    if plain:
+        return ("-" if value is None
+                else f"£{value:,.0f}" + (f"  {band(value).upper()}" if band(value) else ""))
+    bd = band(value)
+    style = (f'background:{BAND_BG[bd]};color:{BAND_TEXT[bd]};font-weight:bold'
+             if bd else "")
+    return (f'<td align="right" style="{style}">'
+            + (f"£{value:,.0f}" if value is not None else "—") + "</td>")
+
+
+def apply_section_bands(path, out_path, blocks=None, first_data_col=3,
+                        date_row=None):
     """Traffic-light every wagon cell in every section block on DAILY.
 
     ISNUMBER guards each test so blanks and text ('VOR', 'MN') are left alone —
@@ -222,6 +252,10 @@ def apply_section_bands(path, out_path):
     older per-block bands without those having to be deleted. Ranges are drawn
     out to the existing conditional-formatting frontier, which means the daily
     fill's extend_conditional_formatting carries them onto each new day.
+
+    `blocks` is [(name, first row, last row)]; leave it out for Leyland, whose
+    layout is detected. Lancashire passes its own, with first_data_col=4 and
+    date_row=1 — its dates sit on row 1 from column D, not row 2 from column C.
     """
     z = zipfile.ZipFile(path)
     wbx = z.read('xl/workbook.xml').decode()
@@ -230,7 +264,8 @@ def apply_section_bands(path, out_path):
     part = 'xl/' + re.search(
         rf'<Relationship[^>]*Id="{rid}"[^>]*Target="([^"]+)"', rels).group(1).lstrip('/')
 
-    layout = detect_layout(openpyxl.load_workbook(path)['DAILY'])
+    if blocks is None:
+        blocks = detect_layout(openpyxl.load_workbook(path)['DAILY']).blocks
     sheet = z.read(part).decode()
 
     # ── styles: append one dxf per band ──────────────────────────────
@@ -270,24 +305,26 @@ def apply_section_bands(path, out_path):
         for p in (cf.get('sqref') or '').split():
             ends.append(range_boundaries(p)[2])
     # the frontier the daily fill maintains; fall back to the last date column
-    frontier = max(ends) if ends else None
-    if frontier is None:
-        wsv = openpyxl.load_workbook(path, data_only=True)['DAILY']
-        frontier = max(c for c in range(3, wsv.max_column + 2)
-                       if isinstance(wsv.cell(DATE_ROW, c).value, datetime))
+    wsv = openpyxl.load_workbook(path, data_only=True)['DAILY']
+    last_date = max((c for c in range(first_data_col, wsv.max_column + 2)
+                     if isinstance(wsv.cell(date_row or DATE_ROW, c).value, datetime)),
+                    default=None)
+    # The frontier the daily fill maintains, but never short of the last real day
+    # — Lancashire's own rules stop well before its newest column.
+    frontier = max([e for e in ends] + [last_date or 0]) or last_date
     # Priorities are unique across the whole sheet, so every existing rule drops
     # by the number we are about to add and ours take 1..N. Duplicated priorities
     # are one of the things Excel silently "repairs".
-    incoming = len(layout.blocks) * len(BAND_FILLS)
+    incoming = len(blocks) * len(BAND_FILLS)
     for rule in tree.iter(q('cfRule')):
         p = rule.get('priority')
         if p is not None:
             rule.set('priority', str(int(p) + incoming))
 
     anchor_after = existing[-1] if existing else tree.find(q('sheetData'))
-    first_col = get_column_letter(3)
+    first_col = get_column_letter(first_data_col)
     made = priority = 0
-    for _name, a, b in layout.blocks:
+    for _name, a, b in blocks:
         sqref = f"{first_col}{a}:{get_column_letter(frontier)}{b}"
         cf = etree.Element(q('conditionalFormatting'))
         cf.set('sqref', sqref)

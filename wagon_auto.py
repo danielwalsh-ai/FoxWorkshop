@@ -45,7 +45,8 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 
 from wagon_master_fill import (fill_master, master_state, read_transaction_report,
-                               SheetXmlEditor, detect_layout, apply_section_bands)
+                               SheetXmlEditor, detect_layout, apply_section_bands,
+                               band, band_cell, TARGET_PER_WAGON)
 import tidy_master
 import lancs_cover                  # Paul wants the same cover tab on both masters
 import lancs_inject
@@ -737,24 +738,6 @@ SECTION_DISPLAY = [("HOOKS", "Hooks", "avg"), ("8W", "8x4", "avg"),
                    ("ARTIC - NIGHT WORK - BREAKDOWN", "Nights total", "sum")]
 
 
-# Paul's bands for a per-wagon average (11/08/2026): £700 or over is green,
-# within £100 of it amber, under £600 red.
-TARGET_PER_WAGON = 700.0
-BAND_GREEN, BAND_AMBER, BAND_RED = "#0b7a3b", "#b7791f", "#b42318"
-BAND_BG = {"green": "#e6f4ea", "amber": "#fdf3e2", "red": "#fdeceb"}
-
-
-def band(v):
-    """green / amber / red for a per-wagon average, or None if not applicable."""
-    if v is None:
-        return None
-    if v >= TARGET_PER_WAGON:
-        return "green"
-    if v >= TARGET_PER_WAGON - 100:
-        return "amber"
-    return "red"
-
-
 def section_averages(master, day):
     """[(name, day average, month-to-date average)] — the per-wagon figures Paul
     forwards on. Read straight off the wagon rows, which are literal values.
@@ -805,15 +788,13 @@ def section_averages(master, day):
 def sections_html(secs, day):
     cells = []
     for shown, v, mtd in secs:
-        tds = []
-        for value in (v, mtd):
-            bd = band(value) if "total" not in shown.lower() else None
-            style = (f'background:{BAND_BG[bd]};color:'
-                     f'{ {"green": BAND_GREEN, "amber": BAND_AMBER, "red": BAND_RED}[bd] };'
-                     'font-weight:bold') if bd else ""
-            tds.append(f'<td align="right" style="{style}">'
-                       + (f"£{value:,.0f}" if value is not None else "—") + "</td>")
-        cells.append(f"<tr><td>{shown}</td>{''.join(tds)}</tr>")
+        # a total is not a per-wagon figure, so it is never banded
+        plain_row = "total" in shown.lower()
+        tds = "".join(
+            (f'<td align="right">' + (f"£{value:,.0f}" if value is not None else "—")
+             + "</td>") if plain_row else band_cell(value)
+            for value in (v, mtd))
+        cells.append(f"<tr><td>{shown}</td>{tds}</tr>")
     rows = "\n".join(cells)
     return f"""
       <p style="margin-bottom:4px"><b>Average per wagon — {day:%a} {day.day} {day:%b}</b></p>

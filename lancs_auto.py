@@ -31,7 +31,9 @@ from email.message import EmailMessage
 import lancs_pack
 import lancs_cover
 import lancs_inject
+import lancs_data
 from lancs_pack import money
+from wagon_master_fill import (apply_section_bands, band_cell, TARGET_PER_WAGON)
 
 HERE = Path(__file__).parent
 STATE_DIR = HERE / "state"
@@ -153,13 +155,16 @@ def fetch_mel(tmpdir, since_days=10, wanted=None):
 
 def sections_text(r):
     """Per-section average per wagon on the day — Paul forwards these on
-    (asked 08/08/2026, for both masters)."""
+    (asked 08/08/2026, for both masters). RAG banded from 11/08/2026, same
+    figures as the DAILY tab's own shading."""
     cats = r.get("cats") or []
     if not cats:
         return ""
-    return (f"Average per wagon by section:\n" + "\n".join(
-        f"  {c['name']}: " + (money(round(c["avg"])) if c["avg"] else "-")
-        for c in cats) + "\n\n")
+    return ("Average per wagon by section:\n" + "\n".join(
+        f"  {c['name']}: " + band_cell(c["avg"] and round(c["avg"]), plain=True)
+        for c in cats)
+        + f"\n  (green £{int(TARGET_PER_WAGON)}+, amber £{int(TARGET_PER_WAGON)-100}"
+          f"-£{int(TARGET_PER_WAGON)-1}, red under £{int(TARGET_PER_WAGON)-100})\n\n")
 
 
 def body_text(r):
@@ -189,8 +194,8 @@ def body_html(r):
     sections = ""
     if cats:
         rows = "\n".join(
-            f'<tr><td>{c["name"]}</td><td align="right">'
-            + (money(round(c["avg"])) if c["avg"] else "-") + "</td></tr>"
+            f'<tr><td>{c["name"]}</td>'
+            + band_cell(c["avg"] and round(c["avg"])) + "</tr>"
             for c in cats)
         sections = f"""
 <p style="margin-bottom:4px"><b>Average per wagon by section</b></p>
@@ -198,7 +203,11 @@ def body_html(r):
 <tr style="background:#24214a;color:#fff">
 <th align="left">Section</th><th align="right">Per wagon</th></tr>
 {rows}
-</table>"""
+</table>
+<p style="font-size:12px;color:#666;margin-top:4px">
+Green £{TARGET_PER_WAGON:,.0f} or over &nbsp;·&nbsp;
+Amber £{TARGET_PER_WAGON-100:,.0f}–£{TARGET_PER_WAGON-1:,.0f} &nbsp;·&nbsp;
+Red under £{TARGET_PER_WAGON-100:,.0f}</p>"""
     return f"""<html><body>
 <p>Hi All,</p>
 <p>Today's Lancashire daily wagon earnings pack for {d:%a} {d.day} {d:%b %Y} is attached.</p>
@@ -362,6 +371,23 @@ def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False):
         if fixed["changed"]:
             print(f"  over-target green: {fixed['changed']} threshold(s) set to 700")
         book = norm
+        # RAG down the DAILY category blocks, same bands as the email (Paul,
+        # 12/08/2026). Lancashire's dates sit on row 1 from column D.
+        try:
+            # its own directory, keeping the office's filename — the workbook is
+            # attached under whatever it is called on disk
+            band_dir = Path(tmp) / "banded"
+            band_dir.mkdir(exist_ok=True)
+            banded = band_dir / Path(book).name
+            info = apply_section_bands(
+                str(book), str(banded),
+                blocks=[(c[3], c[1], c[2]) for c in lancs_data.CATEGORIES],
+                first_data_col=lancs_data.FIRST_DATA_COL,
+                date_row=lancs_data.DATE_ROW)
+            book = banded
+            print(f"  section bands: {info['blocks']} blocks to column {info['to_column']}")
+        except Exception as e:
+            print(f"  ! section bands failed ({e}) — sending without them")
         pack_dir = Path(out_dir) if out_dir else Path(tmp)
         pack_dir.mkdir(parents=True, exist_ok=True)
         tmp_pdf = Path(tmp) / "pack.pdf"
