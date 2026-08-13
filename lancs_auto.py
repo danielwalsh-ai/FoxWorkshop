@@ -33,7 +33,8 @@ import lancs_cover
 import lancs_inject
 import lancs_data
 from lancs_pack import money
-from wagon_master_fill import (apply_section_bands, band_cell, TARGET_PER_WAGON)
+from wagon_master_fill import (apply_section_bands, band_cell, TARGET_PER_WAGON,
+                               save_as_draft)
 
 HERE = Path(__file__).parent
 STATE_DIR = HERE / "state"
@@ -244,7 +245,7 @@ def validate(r):
 build_cover = lancs_cover.build_onto          # shared with the Leyland run
 
 
-def send(r, pdf, dry_run=False, to_me=False, workbook=None):
+def send(r, pdf, dry_run=False, to_me=False, workbook=None, draft=False):
     d = r["focus"]
     subject = f"Daily Wagon Earnings Pack — {d:%a} {d.day} {d:%b %Y}"
     to = [ENV["GMAIL_USER"]] if to_me else SEND_TO
@@ -276,6 +277,10 @@ def send(r, pdf, dry_run=False, to_me=False, workbook=None):
                   f"({Path(workbook).stat().st_size/1e6:.1f} MB)")
         print()
         print(body_text(r))
+        return
+    if draft:
+        save_as_draft(m, ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"], IMAP_TIMEOUT)
+        print(f"  draft saved (addressed to {', '.join(to)}, not sent)")
         return
     ctx = ssl.create_default_context()
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
@@ -336,7 +341,8 @@ def last_pack_sent():
             pass
 
 
-def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False):
+def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False,
+        draft=False):
     state = load_state()
     done = set(state["processed_message_ids"])
     if not force and not state["processed_message_ids"]:
@@ -411,8 +417,8 @@ def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False):
             return 1
 
         workbook = build_cover(book, pack_dir)
-        send(r, pdf, dry_run, to_me, workbook=workbook)
-        if not dry_run and not to_me:
+        send(r, pdf, dry_run, to_me, workbook=workbook, draft=draft)
+        if not dry_run and not to_me and not draft:
             state["processed_message_ids"] = (state["processed_message_ids"]
                                               + [m["id"] for m in new])[-300:]
             save_state(state)
@@ -426,6 +432,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--to-me", action="store_true",
                     help="send for real, but to Daniel only")
+    ap.add_argument("--draft", action="store_true",
+                    help="save the email to Gmail Drafts instead of sending")
     ap.add_argument("--force", action="store_true",
                     help="rebuild from the newest email even if already processed")
     ap.add_argument("--since-days", type=int, default=10)
@@ -434,7 +442,7 @@ def main():
     if not (a.once or a.scheduled):
         ap.print_help()
         return 1
-    return run(a.dry_run, a.to_me, a.since_days, a.out_dir, a.force)
+    return run(a.dry_run, a.to_me, a.since_days, a.out_dir, a.force, a.draft)
 
 
 if __name__ == "__main__":

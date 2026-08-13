@@ -46,7 +46,7 @@ from openpyxl.utils import get_column_letter
 
 from wagon_master_fill import (fill_master, master_state, read_transaction_report,
                                SheetXmlEditor, detect_layout, apply_section_bands,
-                               band, band_cell, TARGET_PER_WAGON)
+                               band, band_cell, TARGET_PER_WAGON, save_as_draft)
 import tidy_master
 import lancs_cover                  # Paul wants the same cover tab on both masters
 import lancs_inject
@@ -711,21 +711,6 @@ def commentary(results, ctx):
 
 
 # ── email ───────────────────────────────────────────────────────────
-def rows_html(results):
-    out = []
-    for r in results:
-        d = dt.date.fromisoformat(r["date"])
-        note = ""
-        if r["replaced"] and r["previous_total"] is not None \
-                and abs(r["previous_total"] - r["expected_total_earnings"]) >= 1:
-            note = f' <span style="color:#b45309">revised from £{r["previous_total"]:,.2f}</span>'
-        cost = (f'<td align="right">£{r["parts"]:,.2f}</td>'
-                f'<td align="right">£{r["tyres"]:,.2f}</td>') if r["had_costs"] \
-            else '<td align="right">—</td><td align="right">—</td>'
-        out.append(
-            f'<tr><td>{d:%a} {d.day} {d:%b}{note}</td>'
-            f'<td align="right">£{r["expected_total_earnings"]:,.2f}</td>{cost}</tr>')
-    return "\n".join(out)
 
 
 # Paul's names for the blocks, in the order he listed them (08/08/2026). Nights
@@ -811,7 +796,8 @@ def sections_html(secs, day):
         Red under £{TARGET_PER_WAGON-100:,.0f}</p>"""
 
 
-def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
+def send(final_path, results, note, dry_run=False, to_me=False, workbook=None,
+         draft=False):
     last = max(dt.date.fromisoformat(r["date"]) for r in results)
     try:
         secs = section_averages(final_path, last)
@@ -826,13 +812,6 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
     html = f"""
     <div style="font-family:Arial,Helvetica,sans-serif;color:#24214a;font-size:15px">
       {'<p>' + note.replace(chr(10) + chr(10), '</p><p>') + '</p>' if note else ''}
-      <table cellpadding="6" style="border-collapse:collapse;font-size:14px">
-        <tr style="background:#24214a;color:#fff">
-          <th align="left">Day</th><th align="right">Earnings</th>
-          <th align="right">Parts</th><th align="right">Tyres</th>
-        </tr>
-        {rows_html(results)}
-      </table>
       {sections_html(secs, last) if secs else ''}
       <p style="font-size:13px;color:#666">Master attached, updated to
          {ordinal(last.day)} {last:%B}.{cover}</p>
@@ -840,10 +819,9 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
       <p style="font-size:12px;color:#888">Updated automatically from Katie's run sheets
          by danielwalsh.ai</p>
     </div>"""
-    plain = (note + "\n\n" if note else "") + "\n".join(
-        f"{dt.date.fromisoformat(r['date']):%a} {dt.date.fromisoformat(r['date']).day} "
-        f"{dt.date.fromisoformat(r['date']):%b}: "
-        f"£{r['expected_total_earnings']:,.2f}" for r in results)
+    # The day-by-day table came out on Paul's say-so (12/08/2026) — the
+    # commentary already says what moved, so it was the same figures twice.
+    plain = (note.rstrip() if note else "")
     if secs:
         plain += (f"\n\nAverage per wagon — {last:%a} {last.day} {last:%b} "
                   f"(month to date in brackets)\n"
@@ -876,6 +854,10 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None):
               f"({Path(attach).stat().st_size/1e6:.1f} MB"
               + (", with cover)" if cover else ")"))
         print(f"\n{plain}\n")
+        return fname
+    if draft:
+        save_as_draft(m, ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"], IMAP_TIMEOUT)
+        print(f"  draft saved — {fname} (addressed to {', '.join(to)}, not sent)")
         return fname
     ctx = ssl.create_default_context()
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
@@ -932,7 +914,7 @@ def alert_daniel(problems, results, dry_run=False):
 
 
 # ── main ────────────────────────────────────────────────────────────
-def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
+def run(dry_run=False, since_days=21, out_dir=None, to_me=False, draft=False):
     state = load_state()
     with tempfile.TemporaryDirectory() as tmp:
         if not ensure_master(tmp, state):
@@ -994,7 +976,7 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
                 notify_daniel("Wagon run sheets — nothing usable",
                               "Katie's latest email(s) had no run sheet I could use:\n\n"
                               + "\n".join(f"  - {r}" for r in rejected), dry_run)
-            if not dry_run:
+            if not dry_run and not draft:
                 state["processed_message_ids"] += [m["id"] for m in new]
                 save_state(state)
             return 0
@@ -1045,7 +1027,8 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
         covered = lancs_cover.build_onto(banded, cover_dir,
                                          company="Fox Brothers (Leyland)",
                                          averages=True)
-        fname = send(final, results, note, dry_run, to_me=to_me, workbook=covered)
+        fname = send(final, results, note, dry_run, to_me=to_me, workbook=covered,
+                     draft=draft)
 
         if rejected:      # good days went to Paul; the data issue is Daniel's to chase
             notify_daniel(
@@ -1056,7 +1039,7 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False):
                   "the master is updated or Katie re-sends a corrected sheet.",
                 dry_run, state=state, key="|".join(sorted(rejected))[:200])
 
-        if not dry_run:
+        if not dry_run and not draft:
             shutil.copy(final, MASTER_FILE)           # promote only after a clean send
             if not skipped:
                 # A skipped day must stay unprocessed so it retries and self-heals.
@@ -1082,6 +1065,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="build but send nothing")
     ap.add_argument("--since-days", type=int, default=21)
     ap.add_argument("--out-dir", help="also drop the finished master here")
+    ap.add_argument("--draft", action="store_true",
+                    help="save the email to Gmail Drafts instead of sending")
     ap.add_argument("--to-me", action="store_true",
                     help="send the real email to Daniel only, not Paul")
     a = ap.parse_args()
@@ -1119,6 +1104,7 @@ def main():
         ap.print_help()
         return 1
     return run(dry_run=a.dry_run, since_days=a.since_days, out_dir=a.out_dir,
+               draft=a.draft,
                to_me=a.to_me)
 
 

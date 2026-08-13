@@ -219,6 +219,27 @@ BAND_TEXT = {"green": "#0b7a3b", "amber": "#b7791f", "red": "#b42318"}
 BAND_BG = {"green": "#e6f4ea", "amber": "#fdf3e2", "red": "#fdeceb"}
 
 
+def save_as_draft(msg, user, password, timeout=90):
+    """Put a fully-built message in Gmail's Drafts instead of sending it.
+
+    Nothing leaves the building without Daniel's sign-off, so both reports can
+    be produced as a draft he opens, checks and sends himself."""
+    import time
+    import imaplib
+    M = imaplib.IMAP4_SSL("imap.gmail.com", timeout=timeout)
+    try:
+        M.login(user, password)
+        typ, _ = M.append('"[Gmail]/Drafts"', r'\Draft',
+                          imaplib.Time2Internaldate(time.time()), msg.as_bytes())
+        if typ != "OK":
+            raise RuntimeError(f"IMAP APPEND returned {typ}")
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
 def band(v):
     """green / amber / red for a per-wagon average, or None if not applicable."""
     if v is None:
