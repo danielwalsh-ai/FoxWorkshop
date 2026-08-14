@@ -60,7 +60,8 @@ SEND_TO = ["mel@foxbrothers.co.uk", "paulfox@foxbrothers.co.uk",
            "stuartsweet@foxbrothers.co.uk"]
 SEND_CC = ["barry.hope@foxgroup.co", "mike.yates@foxgroup.co", "liam@foxgroup.co",
            "Richard.Kirwin@foxgroup.co", "daniel.walsh@kfltd.uk",
-           "reports@foxgroup.co"]      # Paul's shared reports box, set up 05/08/2026
+           "reports@foxgroup.co",      # Paul's shared reports box, set up 05/08/2026
+           "ryan.pearson@foxgroup.co"]  # Ryan Pearson, Finance Director (13/08/2026)
 SIGN_OFF = "Daniel"
 IMAP_TIMEOUT = 90
 MIN_PLAUSIBLE_DAY = 20_000

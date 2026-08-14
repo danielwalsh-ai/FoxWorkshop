@@ -86,7 +86,8 @@ SEND_CC = ["daniel.walsh@kfltd.uk",
            "mark@hurtplant.co.uk",
            "caroline@hurtplant.co.uk",
            "jb@hurtplant.co.uk",
-           "michael.reynolds@hurtplant.co.uk"]
+           "michael.reynolds@hurtplant.co.uk",
+           "ryan.pearson@foxgroup.co"]      # Ryan Pearson, Finance Director (13/08/2026)
 MODEL = "claude-sonnet-5"
 
 # Rows are never addressed by number — wagon_master_fill.detect_layout finds every
