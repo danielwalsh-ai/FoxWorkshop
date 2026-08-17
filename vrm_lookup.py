@@ -124,7 +124,8 @@ def _load_original(path=ORIGINAL):
 
 
 def load_lookup(merge_original=True, report_unknowns=False):
-    """Master is primary; original fills regs the master doesn't have."""
+    """Master is primary; original fills gaps; the daily Autocheck fleet report
+    then fills anything still missing (and fixes master rows with no area)."""
     reg_to_area, reg_make, reg_plate, unknown_areas = _load_master()
     filled = 0
     if merge_original:
@@ -134,6 +135,22 @@ def load_lookup(merge_original=True, report_unknowns=False):
                 if plate_cat(reg):
                     reg_plate.setdefault(reg, plate_cat(reg))
                 filled += 1
+    # third source: the daily Autocheck fleet report (autocheck_fleet.csv),
+    # refreshed each morning by fetch_autocheck_fleet.py. Only fills regs the
+    # master/original don't cover, or ones the master left as UNIDENTIFIED.
+    ac_path = HERE / "autocheck_fleet.csv"
+    ac_filled = 0
+    if ac_path.exists():
+        try:
+            from autocheck_areas import build_reg_area
+            for reg, area in build_reg_area(str(ac_path)).items():
+                if reg not in reg_to_area or reg_to_area[reg] == 'UNIDENTIFIED':
+                    reg_to_area[reg] = area
+                    if plate_cat(reg):
+                        reg_plate.setdefault(reg, plate_cat(reg))
+                    ac_filled += 1
+        except Exception as exc:
+            print(f"vrm_lookup: Autocheck fleet merge skipped ({exc})")
     if report_unknowns:
         return reg_to_area, reg_make, reg_plate, unknown_areas, filled
     return reg_to_area, reg_make, reg_plate

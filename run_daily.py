@@ -38,6 +38,13 @@ def run(report_date: dt.date, send=True, to_me=False):
     scrape(report_date.isoformat(), report_date.isoformat())
     csv_path = HERE / "SupplierTransaction.csv"
 
+    # refresh the Autocheck fleet map (best-effort) so plate->area is current
+    try:
+        from fetch_autocheck_fleet import fetch as _fetch_fleet
+        _fetch_fleet()
+    except Exception as _e:
+        print(f"autocheck fleet refresh skipped: {_e}")
+
     # 2. classify + load into the database (the builder reads it back)
     df = process_csv(csv_path, report_date)
     try:
