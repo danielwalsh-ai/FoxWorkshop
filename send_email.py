@@ -38,7 +38,57 @@ def _attach(path):
     return {"filename": Path(path).name, "content": base64.b64encode(data).decode()}
 
 
-def send_report(pdf_path, xlsx_path, report_date_long, headline="", to_me=False):
+def _fmt_gbp(v):
+    return f"£{v:,.0f}"
+
+
+def _averages_html(spd, floor=100.0):
+    """Two compact tables (age range + area) of average spend per active day,
+    omitting any line whose YTD/day average is under £floor. Returns '' if spd
+    is missing so the email still sends."""
+    if not spd:
+        return ""
+    agel = {2021: "2021 plate", 2022: "2022 plate", 2023: "2023 plate",
+            2024: "2024 plate", 2025: "2025 plate", 2026: "2026 plate",
+            "other": "Older / private"}
+    age_rows = []
+    for k in (2021, 2022, 2023, 2024, 2025, 2026, "other"):
+        yv = spd["age_ytd"].get(k, 0)
+        if yv >= floor:
+            age_rows.append((agel[k], yv, spd["age_mtd"].get(k, 0)))
+    area_rows = []
+    for a, yv in sorted(spd["area_ytd"].items(), key=lambda x: -x[1]):
+        if yv >= floor:
+            area_rows.append((a.title(), yv, spd["area_mtd"].get(a, 0)))
+
+    def _tbl(title, rows):
+        head = (f"<tr><th align='left' style='background:#24214a;color:#fff;"
+                f"padding:5px 10px;font-size:12px'>{title}</th>"
+                "<th align='right' style='background:#24214a;color:#fff;padding:5px 10px;font-size:12px'>YTD / day</th>"
+                "<th align='right' style='background:#24214a;color:#fff;padding:5px 10px;font-size:12px'>This month / day</th></tr>")
+        body = ""
+        for i, (lbl, yv, mv) in enumerate(rows):
+            bg = "#f2f3f7" if i % 2 == 0 else "#ffffff"
+            body += (f"<tr style='background:{bg}'>"
+                     f"<td style='padding:4px 10px;font-size:12px'>{lbl}</td>"
+                     f"<td align='right' style='padding:4px 10px;font-size:12px'>{_fmt_gbp(yv)}</td>"
+                     f"<td align='right' style='padding:4px 10px;font-size:12px'>{_fmt_gbp(mv)}</td></tr>")
+        return ("<table cellspacing='0' cellpadding='0' "
+                "style='border-collapse:collapse;border:1px solid #ddd;margin:0 24px 16px 0'>"
+                + head + body + "</table>")
+
+    return (
+        "<h3 style='color:#24214a;margin:18px 0 4px'>Average Spend per Day</h3>"
+        "<p style='color:#666;margin:0 0 10px;font-size:12px'>Average spend per active day. "
+        "YTD from 1 January 2026; this month from the 1st. Lines averaging under £100/day are omitted.</p>"
+        "<table cellspacing='0' cellpadding='0'><tr>"
+        f"<td valign='top'>{_tbl('By age range', age_rows)}</td>"
+        f"<td valign='top'>{_tbl('By area', area_rows)}</td>"
+        "</tr></table>"
+    )
+
+
+def send_report(pdf_path, xlsx_path, report_date_long, headline="", to_me=False, spd=None):
     env = load_env()
     api_key = env.get("RESEND_API_KEY", "")
     sender = env.get("EMAIL_FROM", "")
@@ -74,6 +124,7 @@ def send_report(pdf_path, xlsx_path, report_date_long, headline="", to_me=False)
       <p style="color:#666;margin-top:0">{report_date_long}</p>
       {body_line}
       <p>The full KPI report (PDF) and transaction workbook (Excel) are attached.</p>
+      {_averages_html(spd)}
       <hr style="border:none;border-top:1px solid #ccc">
       <p style="font-size:12px;color:#888">Prepared automatically by danielwalsh.ai</p>
     </div>

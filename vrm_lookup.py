@@ -31,7 +31,7 @@ ORIGINAL_TYPE_MAP = {
 # Exact AREA labels that exist as rows on the Cover sheet (valid destinations)
 COVER_AREAS = {
     '8 ALI BODY', '8 EV', '8 WHEELERS', 'ARTICS', 'CONCRETE MIXER', 'WORKSHOP',
-    'GRABS', 'HOOKS', 'SWEEPER', 'TRAILERS', 'UNIDENTIFIED', 'BEAVER TAIL', 'CAR',
+    'GRABS', 'HOOKS', 'SWEEPER', 'TRAILERS', 'REFERENCE MISSING', 'BEAVER TAIL', 'CAR',
     'FUEL TANKER', 'PICK UP', 'SHUNTER', 'TIPPER', 'VAN', 'PLANT', 'JAY/FABSHOP',
     'TYRES', 'TARMAC/ASPHALT',
 }
@@ -97,7 +97,7 @@ def _load_master(path=MASTER):
                 if mapped:
                     reg_to_area[reg] = mapped
                 else:
-                    reg_to_area[reg] = 'UNIDENTIFIED'
+                    reg_to_area[reg] = 'REFERENCE MISSING'
                     unknown_areas.setdefault(area_raw, []).append(f"{sheet}:{reg}")
             cat = plate_cat(reg)
             if cat:
@@ -137,14 +137,14 @@ def load_lookup(merge_original=True, report_unknowns=False):
                 filled += 1
     # third source: the daily Autocheck fleet report (autocheck_fleet.csv),
     # refreshed each morning by fetch_autocheck_fleet.py. Only fills regs the
-    # master/original don't cover, or ones the master left as UNIDENTIFIED.
+    # master/original don't cover, or ones the master left as REFERENCE MISSING.
     ac_path = HERE / "autocheck_fleet.csv"
     ac_filled = 0
     if ac_path.exists():
         try:
             from autocheck_areas import build_reg_area
             for reg, area in build_reg_area(str(ac_path)).items():
-                if reg not in reg_to_area or reg_to_area[reg] == 'UNIDENTIFIED':
+                if reg not in reg_to_area or reg_to_area[reg] == 'REFERENCE MISSING':
                     reg_to_area[reg] = area
                     if plate_cat(reg):
                         reg_plate.setdefault(reg, plate_cat(reg))
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     for cat, n in Counter(reg_plate.values()).most_common():
         print(f"  {cat:<10} {n}")
     if unknown:
-        print("\n!! AREA labels not recognised (routed to UNIDENTIFIED):")
+        print("\n!! AREA labels not recognised (routed to REFERENCE MISSING):")
         for area, regs in unknown.items():
             print(f"  '{area}': {len(regs)} -> {regs[:5]}")
     else:

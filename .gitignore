@@ -28,3 +28,16 @@ add_domain.py
 page_dump.html
 network_log.txt
 network_interesting.txt
+
+# scratch / ops scripts (not part of the daily pipeline)
+backfill_areas.py
+backfill_autocheck.py
+catch_up.py
+recategorise.py
+reclassify_year.py
+revert_areas.py
+# generated preview artefacts
+_chart_*.png
+_pg*.png
+_email_preview.html
+*_revert.json

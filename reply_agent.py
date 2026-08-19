@@ -50,7 +50,7 @@ Columns:
                     'J FISHER','NMS CIVIL','Plant','Graphics','PPE- Workwear','Tyres','Misc',
                     'Assets For sale','Asphalt Plant ','J Fisher Plant','NMS Plant','Damage',
                     'Windscreen & Glass','Capital'
-  area (text)       vehicle area e.g. '8 WHEELERS','ARTICS','HOOKS','TIPPER', or 'UNIDENTIFIED'
+  area (text)       vehicle area e.g. '8 WHEELERS','ARTICS','HOOKS','TIPPER', or 'REFERENCE MISSING'
   plate (text)      'pre24' | '24plate' | '25plate'
   vehicle_reg (text) the registration, e.g. 'PO26TOJ'.
 Table: budgets(division, year, month, budget).

@@ -29,7 +29,7 @@ def overview(y, m):
         cur.execute("""SELECT area, ROUND(SUM(cost),2) FROM transactions
                        WHERE report_date >= %s AND report_date < %s
                        GROUP BY area ORDER BY 2 DESC""", (first, nxt))
-        areas = [{"area": a or 'UNIDENTIFIED', "total": float(t)} for a, t in cur.fetchall()]
+        areas = [{"area": a or 'REFERENCE MISSING', "total": float(t)} for a, t in cur.fetchall()]
         cur.execute("""SELECT report_date, ROUND(SUM(cost),2) FROM transactions
                        WHERE report_date >= %s AND report_date < %s
                        GROUP BY report_date ORDER BY report_date""", (first, nxt))
@@ -127,6 +127,44 @@ def reg_year_split(report_date):
         if rd == report_date:
             today[key] += cost
     return dict(today), dict(mtd), dict(ytd)
+
+
+def spend_per_day(report_date):
+    """Average spend per day by AREA and by AGE range (Paul Fox request).
+    'Per day' = period total / number of active days in the period. YTD runs from
+    1 Jan; MTD from the 1st of the report month. Area uses all-division spend
+    (matches the Spend-by-Area breakdown); age uses the workshop top-sheets."""
+    import datetime as _dt
+    from collections import defaultdict
+    from classify import reg_year, TOP_SHEETS
+    TOP = {s.strip() for s in TOP_SHEETS}
+    jan1 = _dt.date(report_date.year, 1, 1)
+    first, _ = _bounds(report_date.year, report_date.month)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""SELECT report_date, division, area, vehicle_reg, cost FROM transactions
+                       WHERE report_date >= %s AND report_date <= %s""", (jan1, report_date))
+        rows = cur.fetchall()
+    ytd_days = len({r[0] for r in rows}) or 1
+    mtd_days = len({r[0] for r in rows if r[0] >= first}) or 1
+    area_y, area_m = defaultdict(float), defaultdict(float)
+    age_y, age_m = defaultdict(float), defaultdict(float)
+    for rd, div, area, reg, cost in rows:
+        cst = float(cost or 0)
+        a = area or 'REFERENCE MISSING'
+        area_y[a] += cst
+        if rd >= first:
+            area_m[a] += cst
+        if (div or '').strip() in TOP:
+            k = reg_year(reg or '') or 'other'
+            age_y[k] += cst
+            if rd >= first:
+                age_m[k] += cst
+    per = lambda d, days: {k: v / days for k, v in d.items()}
+    return {
+        'ytd_days': ytd_days, 'mtd_days': mtd_days,
+        'area_ytd': per(area_y, ytd_days), 'area_mtd': per(area_m, mtd_days),
+        'age_ytd': per(age_y, ytd_days), 'age_mtd': per(age_m, mtd_days),
+    }
 
 
 def parts_category_split(report_date):

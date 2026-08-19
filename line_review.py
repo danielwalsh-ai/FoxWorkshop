@@ -46,8 +46,8 @@ def rule_flags(lines, reg_known):
         reasons = []
         if division in WAGON_DIVISIONS and any(t in refs for t in PLANT_TERMS):
             reasons.append('plant-machinery reference on a wagon division')
-        if area == 'UNIDENTIFIED' and cost >= 100:
-            reasons.append('unidentified area')
+        if area == 'REFERENCE MISSING' and cost >= 100:
+            reasons.append('reference missing')
         if division in WAGON_DIVISIONS and cost >= 250 and not REG_RX.search(refs.replace(' ', '')):
             reasons.append('no vehicle registration on a wagon line')
         m = REG_RX.search(refs.replace(' ', ''))

@@ -60,7 +60,14 @@ def run(report_date: dt.date, send=True, to_me=False):
         print(f"!! Balance gap £{diff:,.2f} — NOT emailing. Investigate first.")
         return 1
     if send:
-        send_report(out_pdf, out_xlsx, date_long, f"Today's total spend: £{daily_total:,.2f}", to_me=to_me)
+        try:
+            import queries
+            _spd = queries.spend_per_day(report_date)
+        except Exception as _e:
+            print(f"averages for email skipped: {_e}")
+            _spd = None
+        send_report(out_pdf, out_xlsx, date_long,
+                    f"Today's total spend: £{daily_total:,.2f}", to_me=to_me, spd=_spd)
         # nightly line review — never blocks or fails the report itself
         try:
             from line_review import review, send_review_email

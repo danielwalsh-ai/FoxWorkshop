@@ -25,11 +25,12 @@ PRE24_ROW = 44; R24_ROW = 45; R25_ROW = 46
 INFO_ROWS = [SCANIA_ROW, VOLVO_ROW, CAPITAL_ROW, PRE24_ROW, R24_ROW, R25_ROW]
 COVER_BOTTOM_ROW = {
     '8 ALI BODY': 47, '8 EV': 48, '8 WHEELERS': 49, 'ARTICS': 50, 'CONCRETE MIXER': 51,
-    'WORKSHOP': 52, 'GRABS': 53, 'HOOKS': 54, 'SWEEPER': 55, 'TRAILERS': 56, 'UNIDENTIFIED': 57,
+    'WORKSHOP': 52, 'GRABS': 53, 'HOOKS': 54, 'SWEEPER': 55, 'TRAILERS': 56, 'REFERENCE MISSING': 57,
     'BEAVER TAIL': 58, 'CAR': 59, 'FUEL TANKER': 60, 'PICK UP': 61, 'SHUNTER': 62,
     'TIPPER': 63, 'VAN': 64, 'PLANT': 65, 'JAY/FABSHOP': 66, 'TYRES': 67, 'TARMAC/ASPHALT': 68,
+    'CONSUMABLES': 69,
 }
-BOT_TOTAL_ROW = 69
+BOT_TOTAL_ROW = 70
 TOP_SHEETS = set(COVER_TOP_ROW.keys())
 sheet_to_row = {**{s: r for s, r in COVER_TOP_ROW.items()}, 'Capital': 43}
 PLATE_ROWS = {'pre24': PRE24_ROW, '24plate': R24_ROW, '25plate': R25_ROW}
@@ -59,29 +60,83 @@ def reg_year(ref):
     return year if 2021 <= year <= 2026 else None
 
 
-def get_area(row, reg_to_area):
+# ── Area rules (Daniel's agreed ownership rules) ────────────────────
+# These route non-vehicle / no-plate lines to an existing cover-area row so the
+# bottom "area" breakdown stays meaningful and still balances. Anything that
+# matches NO rule stays REFERENCE MISSING — an honest, actionable bucket (the
+# line has no usable reference on the PO), NOT a catch-all guess.
+TRAILER_RE = re.compile(r"\b(FBT|HTR|MSS|NMS)\s?\d")
+# Strong words in the reference or part name -> area (checked first).
+REF_AREA = [
+    ("SWARF HOUSE", "PLANT"), ("MARTIN", "PLANT"),          # any 'martin' -> Plant (DW 19/08/2026)
+    ("HITACHI", "PLANT"), ("ZX160", "PLANT"), ("ZX210", "PLANT"), ("ZX300", "PLANT"),
+    ("LIUGONG", "PLANT"), ("WIRTGEN", "PLANT"), ("CARRINGTON", "PLANT"),
+    ("ASPHALT PLANT", "PLANT"), ("CRUSHER", "PLANT"), ("SCREENER", "PLANT"), ("PLANER", "PLANT"),
+    ("WASTE TYRE", "TYRES"), ("TYRE", "TYRES"),
+    ("DARREN COLDERLEY", "CONSUMABLES"), ("DARREN COLDERLY", "CONSUMABLES"), ("DARREN C", "CONSUMABLES"),
+]
+# Supplier name -> area.
+SUPPLIER_AREA = [
+    ("GEMINI SOFTWARE", "WORKSHOP"), ("GEMINII", "WORKSHOP"),
+    ("A L TYRES", "TYRES"), ("TYRE", "TYRES"),
+    ("CAT FINNING", "PLANT"), ("LIUGONG", "PLANT"), ("WIRTGEN", "PLANT"),
+    ("PLANT AND MACHINE", "PLANT"), ("RETEC", "PLANT"),
+    ("LANCASHIRE OIL", "CONSUMABLES"),
+]
+# The division/sheet already implies the area.
+DIVISION_AREA = {
+    "PLANT": "PLANT", "J FISHER PLANT": "PLANT", "NMS PLANT": "PLANT",
+    "ASPHALT PLANT": "PLANT", "TYRES": "TYRES",
+}
+CONSUMABLE_KW = [
+    "TAR", "GLUE REMOVER", "ANTIFREEZE", "ADBLUE", "GREASE", "AIRCON GAS", "R134A",
+    "DEGREAS", "CABLE TIE", "WD40", "RAG", "SEALANT", "SILICONE", "BRAKE CLEANER",
+    "MAINTENANCE SPRAY", "CONSUMABLE", "PUMP-IN", "PUMP IN", "PUMPING", "5W/30",
+    "10W-40", "10W40", "5W30",
+]
+
+
+def get_area(row, reg_to_area, division=None):
     cr = str(row.get('Custom Ref', '')); sr = str(row.get('Supplier Ref', ''))
-    for ref in [cr, sr]:
-        if any(ref.upper().replace(' ', '').startswith(p) for p in ['FBT', 'HTR', 'MSS']):
+    sup = str(row.get('Supplier', '')).upper()
+    part = str(row.get('Part Name', '')).upper()
+    refs = (cr + ' ' + sr).upper()
+    blob = refs + ' ' + part
+    div = (division or '').upper().strip()
+
+    # 1. trailer fleet number (NMS9, FBT21, HTR14 ...) or FBT/HTR/MSS prefix
+    if TRAILER_RE.search(refs):
+        return 'TRAILERS'
+    for ref in (cr, sr):
+        if any(ref.upper().replace(' ', '').startswith(p) for p in ('FBT', 'HTR', 'MSS')):
             return 'TRAILERS'
-    for ref in [cr, sr]:
+    # 2. registration plate -> vehicle area (master + Autocheck lookup)
+    for ref in (cr, sr):
         reg = extract_reg(ref)
         if reg and reg in reg_to_area:
             return reg_to_area[reg]
-    for ref in [cr, sr]:
-        ru = ref.upper()
-        if 'ASPHALT PLANT' in ru:
-            return 'PLANT'
-        if 'CRUSHER' in ru or 'SCREENER' in ru:
-            return 'PLANT'
-        if ru.strip() == 'PLANT':
-            return 'PLANT'
-        if 'WASTE TYRE' in ru:
-            return 'TYRES'
-        if any(k in ru for k in ['STOCK', 'WORKSHOP', 'MISSING', 'CONSUMABLE',
-                                 'WATERING', 'WHEEL MARKER', 'LOLER', 'SEAL KIT']):
-            return 'WORKSHOP'
-    return 'UNIDENTIFIED'
+    # 3. strong reference / part-name words
+    for sub, area in REF_AREA:
+        if sub in blob:
+            return area
+    # 4. supplier name
+    for sub, area in SUPPLIER_AREA:
+        if sub in sup:
+            return area
+    # 5. division tells us the area
+    if div in DIVISION_AREA:
+        return DIVISION_AREA[div]
+    # 6. workshop stock / missing-part references
+    if any(k in refs for k in ('STOCK', 'WORKSHOP', 'MISSING', 'WATERING',
+                               'WHEEL MARKER', 'LOLER', 'SEAL KIT')):
+        return 'WORKSHOP'
+    if refs.strip() == 'PLANT':
+        return 'PLANT'
+    # 7. genuine consumable items
+    if any(k in blob for k in CONSUMABLE_KW):
+        return 'CONSUMABLES'
+    # 8. no usable reference on the line
+    return 'REFERENCE MISSING'
 
 
 def get_plate(row, reg_plate):
@@ -170,7 +225,7 @@ def process_csv(csv_path, report_date, reg_to_area=None, reg_plate=None):
     df = df[df['Date'].dt.date == report_date]
     df = df.copy()
     df['Sheet'] = df.apply(classify, axis=1)
-    df['Area'] = df.apply(lambda r: get_area(r, reg_to_area), axis=1)
+    df['Area'] = df.apply(lambda r: get_area(r, reg_to_area, r['Sheet']), axis=1)
     df['Plate'] = df.apply(lambda r: get_plate(r, reg_plate), axis=1)
     return df
 
@@ -186,7 +241,7 @@ def process_all(csv_path, reg_to_area=None, reg_plate=None):
     df = df.drop_duplicates(subset=['PO No', 'Supplier', 'Part Name', 'Cost', 'PO Created Date'])
     df = df.copy()
     df['Sheet'] = df.apply(classify, axis=1)
-    df['Area'] = df.apply(lambda r: get_area(r, reg_to_area), axis=1)
+    df['Area'] = df.apply(lambda r: get_area(r, reg_to_area, r['Sheet']), axis=1)
     df['Plate'] = df.apply(lambda r: get_plate(r, reg_plate), axis=1)
     df['ReportDate'] = df['Date'].dt.date
     return df
