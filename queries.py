@@ -148,22 +148,33 @@ def spend_per_day(report_date):
     mtd_days = len({r[0] for r in rows if r[0] >= first}) or 1
     area_y, area_m = defaultdict(float), defaultdict(float)
     age_y, age_m = defaultdict(float), defaultdict(float)
+    # distinct wagons the average is drawn from THIS MONTH (MTD) — a reg counts
+    # once per bucket. Non-vehicle areas (Consumables, Reference Missing, ...)
+    # carry no reg, so their wagon count is 0.
+    area_wag, age_wag = defaultdict(set), defaultdict(set)
     for rd, div, area, reg, cost in rows:
         cst = float(cost or 0)
         a = area or 'REFERENCE MISSING'
         area_y[a] += cst
+        r = (reg or '').strip().upper()
         if rd >= first:
             area_m[a] += cst
+            if r:
+                area_wag[a].add(r)
         if (div or '').strip() in TOP:
             k = reg_year(reg or '') or 'other'
             age_y[k] += cst
             if rd >= first:
                 age_m[k] += cst
+                if r:
+                    age_wag[k].add(r)
     per = lambda d, days: {k: v / days for k, v in d.items()}
     return {
         'ytd_days': ytd_days, 'mtd_days': mtd_days,
         'area_ytd': per(area_y, ytd_days), 'area_mtd': per(area_m, mtd_days),
         'age_ytd': per(age_y, ytd_days), 'age_mtd': per(age_m, mtd_days),
+        'area_wagons': {k: len(v) for k, v in area_wag.items()},
+        'age_wagons': {k: len(v) for k, v in age_wag.items()},
     }
 
 

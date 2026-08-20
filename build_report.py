@@ -382,31 +382,32 @@ def _write_trends_sheet(wb, spd, chart_daily, chart_monthly, report_date_long,
 
     def table(r0, c0, heading, data):
         ws.cell(r0, c0, heading).font = bold
-        for j, h in enumerate(['', 'YTD / day', 'This month / day']):
+        for j, h in enumerate(['', 'Wagons', 'YTD / day', 'This month / day']):
             cell = ws.cell(r0 + 1, c0 + j, h)
             cell.font = hdr_font; cell.fill = hdr_fill; cell.border = border
             cell.alignment = Alignment(horizontal='left' if j == 0 else 'right')
-        for i, (label, yv, mv) in enumerate(data):
+        for i, (label, wag, yv, mv) in enumerate(data):
             fill = PatternFill('solid', fgColor=LIGHT) if i % 2 == 0 else None
-            for j, v in enumerate([label, yv, mv]):
+            for j, v in enumerate([label, wag, yv, mv]):
                 cell = ws.cell(r0 + 2 + i, c0 + j, v); cell.border = border
-                if j > 0:
+                if j >= 2:
                     cell.number_format = money
                 if fill:
                     cell.fill = fill
 
     age_lbl = {2021: '2021 plate', 2022: '2022 plate', 2023: '2023 plate', 2024: '2024 plate',
                2025: '2025 plate', 2026: '2026 plate', 'other': 'Older / private'}
-    age_rows = [(age_lbl[k], round(spd['age_ytd'].get(k, 0), 2), round(spd['age_mtd'].get(k, 0), 2))
+    aw = spd.get('age_wagons', {}); arw = spd.get('area_wagons', {})
+    age_rows = [(age_lbl[k], aw.get(k, 0), round(spd['age_ytd'].get(k, 0), 2), round(spd['age_mtd'].get(k, 0), 2))
                 for k in (2021, 2022, 2023, 2024, 2025, 2026, 'other')]
-    area_rows = sorted(((a, round(spd['area_ytd'].get(a, 0), 2), round(spd['area_mtd'].get(a, 0), 2))
-                        for a in spd['area_ytd']), key=lambda x: -x[1])
+    area_rows = sorted(((a, arw.get(a, 0), round(spd['area_ytd'].get(a, 0), 2), round(spd['area_mtd'].get(a, 0), 2))
+                        for a in spd['area_ytd']), key=lambda x: -x[2])
     table(48, 1, 'Average spend per day — by age range', age_rows)
-    table(48, 5, 'Average spend per day — by area', area_rows)
+    table(48, 6, 'Average spend per day — by area', area_rows)
     ws.column_dimensions['A'].width = 18
-    ws.column_dimensions['E'].width = 16
-    for col in ('B', 'C', 'F', 'G'):
-        ws.column_dimensions[col].width = 15
+    ws.column_dimensions['F'].width = 16
+    for col in ('B', 'C', 'D', 'G', 'H', 'I'):
+        ws.column_dimensions[col].width = 14
 
 
 def build(report_date: dt.date, fixed_wd=FIXED_WD):
@@ -865,17 +866,18 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     if spd:
         agel = {2021: '2021 plate', 2022: '2022 plate', 2023: '2023 plate', 2024: '2024 plate',
                 2025: '2025 plate', 2026: '2026 plate', 'other': 'Older / private'}
-        age_data = [['By age range', 'YTD / day', 'This mo. / day']]
+        aw = spd.get('age_wagons', {}); arw = spd.get('area_wagons', {})
+        age_data = [['By age range', 'Wagons', 'YTD / day', 'This mo. / day']]
         for k in (2021, 2022, 2023, 2024, 2025, 2026, 'other'):
-            age_data.append([agel[k], fmt(spd['age_ytd'].get(k, 0)), fmt(spd['age_mtd'].get(k, 0))])
-        area_data = [['By area', 'YTD / day', 'This mo. / day']]
+            age_data.append([agel[k], str(aw.get(k, 0)), fmt(spd['age_ytd'].get(k, 0)), fmt(spd['age_mtd'].get(k, 0))])
+        area_data = [['By area', 'Wagons', 'YTD / day', 'This mo. / day']]
         for a, _v in sorted(spd['area_ytd'].items(), key=lambda x: -x[1]):
-            area_data.append([a.title(), fmt(spd['area_ytd'][a]), fmt(spd['area_mtd'].get(a, 0))])
-        cwid = [36 * mm, 27 * mm, 30 * mm]; rh2 = 5.0 * mm
+            area_data.append([a.title(), str(arw.get(a, 0)), fmt(spd['area_ytd'][a]), fmt(spd['area_mtd'].get(a, 0))])
+        cwid = [28 * mm, 12 * mm, 22 * mm, 24 * mm]; rh2 = 5.0 * mm
         age_tbl = Table(age_data, colWidths=cwid, rowHeights=rh2); age_tbl.setStyle(TableStyle(base_tbl()))
         area_tbl = Table(area_data, colWidths=cwid, rowHeights=rh2); area_tbl.setStyle(TableStyle(base_tbl()))
         age_tbl.wrapOn(cv, W, H); age_tbl.drawOn(cv, M, y - len(age_data) * rh2)
-        area_tbl.wrapOn(cv, W, H); area_tbl.drawOn(cv, M + 98 * mm, y - len(area_data) * rh2)
+        area_tbl.wrapOn(cv, W, H); area_tbl.drawOn(cv, M + 94 * mm, y - len(area_data) * rh2)
 
     # Page 3 — Month-to-Date + Spend by Registration Year
     cv.showPage(); chrome(3, 10); y = YT
