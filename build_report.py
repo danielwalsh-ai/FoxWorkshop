@@ -326,7 +326,7 @@ def _style_workbook(wb, today_col, hook_hdr, hook_total_row):
 
 
 def _write_trends_sheet(wb, spd, chart_daily, chart_monthly, report_date_long,
-                        chart_age=None, chart_area=None):
+                        chart_age=None, chart_area=None, chart_daily_pw=None):
     """'Trends & Averages' tab — the two charts + average-spend-per-day tables."""
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     name = 'Trends & Averages'
@@ -377,37 +377,45 @@ def _write_trends_sheet(wb, spd, chart_daily, chart_monthly, report_date_long,
             _place(chart_age, 11, 3, 520)      # L4
         if chart_area:
             _place(chart_area, 11, 18, 560)    # L19
+        if chart_daily_pw:
+            _place(chart_daily_pw, 0, 34, 640)  # A35 (below monthly)
     except Exception as exc:
         print(f"xlsx chart embed skipped: {exc}")
 
     def table(r0, c0, heading, data):
         ws.cell(r0, c0, heading).font = bold
-        for j, h in enumerate(['', 'Wagons', 'YTD / day', 'This month / day']):
+        for j, h in enumerate(['', 'YTD /day per wagon', 'This month /day per wagon']):
             cell = ws.cell(r0 + 1, c0 + j, h)
             cell.font = hdr_font; cell.fill = hdr_fill; cell.border = border
             cell.alignment = Alignment(horizontal='left' if j == 0 else 'right')
-        for i, (label, wag, yv, mv) in enumerate(data):
+        for i, (label, yv, mv) in enumerate(data):
             fill = PatternFill('solid', fgColor=LIGHT) if i % 2 == 0 else None
-            for j, v in enumerate([label, wag, yv, mv]):
+            for j, v in enumerate([label, yv, mv]):
                 cell = ws.cell(r0 + 2 + i, c0 + j, v); cell.border = border
-                if j >= 2:
+                if j >= 1:
                     cell.number_format = money
                 if fill:
                     cell.fill = fill
 
     age_lbl = {2021: '2021 plate', 2022: '2022 plate', 2023: '2023 plate', 2024: '2024 plate',
                2025: '2025 plate', 2026: '2026 plate', 'other': 'Older / private'}
-    aw = spd.get('age_wagons', {}); arw = spd.get('area_wagons', {})
-    age_rows = [(age_lbl[k], aw.get(k, 0), round(spd['age_ytd'].get(k, 0), 2), round(spd['age_mtd'].get(k, 0), 2))
+    afl = spd.get('age_fleet', {}); arfl = spd.get('area_fleet', {})
+    ptv = lambda perday, n: round(perday / n, 2) if n else None   # per wagon, per day (full fleet)
+    age_rows = [(age_lbl[k],
+                 ptv(spd['age_ytd'].get(k, 0), afl.get(k, 0)),
+                 ptv(spd['age_mtd'].get(k, 0), afl.get(k, 0)))
                 for k in (2021, 2022, 2023, 2024, 2025, 2026, 'other')]
-    area_rows = sorted(((a, arw.get(a, 0), round(spd['area_ytd'].get(a, 0), 2), round(spd['area_mtd'].get(a, 0), 2))
-                        for a in spd['area_ytd']), key=lambda x: -x[2])
+    area_rows = sorted(((a,
+                         ptv(spd['area_ytd'].get(a, 0), arfl.get(a, 0)),
+                         ptv(spd['area_mtd'].get(a, 0), arfl.get(a, 0)))
+                        for a in spd['area_ytd'] if arfl.get(a, 0)),
+                       key=lambda x: -spd['area_ytd'].get(x[0], 0))
     table(48, 1, 'Average spend per day — by age range', age_rows)
-    table(48, 6, 'Average spend per day — by area', area_rows)
+    table(48, 5, 'Average spend per day — by area', area_rows)
     ws.column_dimensions['A'].width = 18
-    ws.column_dimensions['F'].width = 16
-    for col in ('B', 'C', 'D', 'G', 'H', 'I'):
-        ws.column_dimensions[col].width = 14
+    ws.column_dimensions['E'].width = 16
+    for col in ('B', 'C', 'F', 'G'):
+        ws.column_dimensions[col].width = 16
 
 
 def build(report_date: dt.date, fixed_wd=FIXED_WD):
@@ -646,17 +654,19 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
 
     # ── Trend charts + average-spend-per-day tabs (Paul Fox request) ──
     spd = queries.spend_per_day(report_date)
-    chart_daily = chart_monthly = chart_age = chart_area = None
+    chart_daily = chart_monthly = chart_age = chart_area = chart_daily_pw = None
     try:
         import charts
         chart_daily = charts.daily_chart(report_date, HERE / "_chart_daily.png")
         chart_monthly = charts.monthly_chart(report_date, HERE / "_chart_monthly.png")
         chart_age = charts.age_avg_chart(spd, HERE / "_chart_age_avg.png")
         chart_area = charts.area_avg_chart(spd, HERE / "_chart_area_avg.png")
+        fleet_total = sum(spd.get('area_fleet', {}).values())
+        chart_daily_pw = charts.daily_perwagon_chart(report_date, HERE / "_chart_daily_pw.png", fleet_total)
     except Exception as _e:
         print(f"charts skipped: {_e}")
     _write_trends_sheet(wb, spd, chart_daily, chart_monthly, report_date_long,
-                        chart_age=chart_age, chart_area=chart_area)
+                        chart_age=chart_age, chart_area=chart_area, chart_daily_pw=chart_daily_pw)
 
     _style_workbook(wb, today_col, HOOK_HDR, HOOK_TOTAL_ROW)
 
@@ -688,7 +698,7 @@ def build(report_date: dt.date, fixed_wd=FIXED_WD):
                today_col, days_elapsed, days_remaining, wd, year_today, year_mtd, parts,
                fn=fn, hooks=hook_pdf, year_ytd=year_ytd, rollups=rollups,
                spd=spd, chart_daily=chart_daily, chart_monthly=chart_monthly,
-               chart_age=chart_age, chart_area=chart_area)
+               chart_age=chart_age, chart_area=chart_area, chart_daily_pw=chart_daily_pw)
     print(f"Saved: {out_xlsx.name}")
     print(f"Saved: {out_pdf.name}")
     return out_xlsx, out_pdf, diff, top, report_date_long
@@ -699,7 +709,7 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
                DAYS_ELAPSED, DAYS_REMAINING, WD, year_today=None, year_mtd=None,
                parts=None, fn=None, hooks=None, year_ytd=None, rollups=None,
                spd=None, chart_daily=None, chart_monthly=None,
-               chart_age=None, chart_area=None):
+               chart_age=None, chart_area=None, chart_daily_pw=None):
     NAVY = colors.HexColor('#24214a'); ORANGE = colors.HexColor('#eb941f')
     BLUE = colors.HexColor('#00579e'); WHITE = colors.white
     LIGHT = colors.HexColor('#F2F3F7'); GREY = colors.HexColor('#666666')
@@ -866,18 +876,23 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     if spd:
         agel = {2021: '2021 plate', 2022: '2022 plate', 2023: '2023 plate', 2024: '2024 plate',
                 2025: '2025 plate', 2026: '2026 plate', 'other': 'Older / private'}
-        aw = spd.get('age_wagons', {}); arw = spd.get('area_wagons', {})
-        age_data = [['By age range', 'Wagons', 'YTD / day', 'This mo. / day']]
+        afl = spd.get('age_fleet', {}); arfl = spd.get('area_fleet', {})
+        pt = lambda perday, n: fmt(perday / n) if n else '—'   # per wagon, per day (over full fleet)
+        age_data = [['By age range', 'YTD /day ea', 'This mo. /day ea']]
         for k in (2021, 2022, 2023, 2024, 2025, 2026, 'other'):
-            age_data.append([agel[k], str(aw.get(k, 0)), fmt(spd['age_ytd'].get(k, 0)), fmt(spd['age_mtd'].get(k, 0))])
-        area_data = [['By area', 'Wagons', 'YTD / day', 'This mo. / day']]
+            n = afl.get(k, 0)
+            age_data.append([agel[k], pt(spd['age_ytd'].get(k, 0), n), pt(spd['age_mtd'].get(k, 0), n)])
+        area_data = [['By area', 'YTD /day ea', 'This mo. /day ea']]
         for a, _v in sorted(spd['area_ytd'].items(), key=lambda x: -x[1]):
-            area_data.append([a.title(), str(arw.get(a, 0)), fmt(spd['area_ytd'][a]), fmt(spd['area_mtd'].get(a, 0))])
-        cwid = [28 * mm, 12 * mm, 22 * mm, 24 * mm]; rh2 = 5.0 * mm
+            n = arfl.get(a, 0)
+            if not n:                       # vehicle sections only for averages
+                continue
+            area_data.append([a.title(), pt(spd['area_ytd'][a], n), pt(spd['area_mtd'].get(a, 0), n)])
+        cwid = [34 * mm, 24 * mm, 26 * mm]; rh2 = 5.0 * mm
         age_tbl = Table(age_data, colWidths=cwid, rowHeights=rh2); age_tbl.setStyle(TableStyle(base_tbl()))
         area_tbl = Table(area_data, colWidths=cwid, rowHeights=rh2); area_tbl.setStyle(TableStyle(base_tbl()))
         age_tbl.wrapOn(cv, W, H); age_tbl.drawOn(cv, M, y - len(age_data) * rh2)
-        area_tbl.wrapOn(cv, W, H); area_tbl.drawOn(cv, M + 94 * mm, y - len(area_data) * rh2)
+        area_tbl.wrapOn(cv, W, H); area_tbl.drawOn(cv, M + 92 * mm, y - len(area_data) * rh2)
 
     # Page 3 — Month-to-Date + Spend by Registration Year
     cv.showPage(); chrome(3, 10); y = YT
@@ -1080,7 +1095,7 @@ def _build_pdf(out_pdf, cover2, g2, report_date, REPORT_DATE, TODAY_COL,
     sec_lbl(y, 'Spend Trends'); y -= LH + G
     cw = W - 2 * M
     drew = False
-    for cpath in (chart_daily, chart_monthly):
+    for cpath in (chart_daily_pw, chart_daily, chart_monthly):
         if not cpath:
             continue
         ir = ImageReader(str(cpath)); iw, ihp = ir.getSize()

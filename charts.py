@@ -119,6 +119,46 @@ def monthly_chart(report_date: dt.date, out_png: Path, months: int = 6) -> Path:
     return out_png
 
 
+def daily_perwagon_chart(report_date: dt.date, out_png: Path, fleet_total: int) -> Path:
+    """One bar per day of the current month: that day's total spend divided by
+    the full fleet count — the average spend per wagon, per day."""
+    first = report_date.replace(day=1)
+    ft = fleet_total or 1
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("""SELECT report_date, ROUND(SUM(cost),2) FROM transactions
+                       WHERE report_date>=%s AND report_date<=%s GROUP BY 1 ORDER BY 1""",
+                    (first, report_date))
+        rows = cur.fetchall()
+    days = [r[0].day for r in rows]
+    vals = [float(r[1] or 0) / ft for r in rows]
+    avg = sum(vals) / len(vals) if vals else 0
+
+    fig, ax = plt.subplots(figsize=(9.2, 3.0), dpi=150)
+    ax.bar(days, vals, width=0.66, color=NAVY, zorder=3)
+    ax.axhline(avg, color=MUTED, linewidth=1.0, linestyle=(0, (4, 3)), zorder=2)
+    ax.annotate(f"avg £{avg:,.2f}/wagon", xy=(min(days) if days else 1, avg),
+                xytext=(2, 4), textcoords="offset points", ha="left", fontsize=8, color=MUTED, zorder=6)
+    mx = max(vals) if vals else 1
+    for xi, v in zip(days, vals):
+        if v > mx * 0.28:
+            ax.annotate(f"£{v:,.2f}", xy=(xi, v), xytext=(0, -6), textcoords="offset points",
+                        ha="center", va="top", rotation=90, fontsize=6.5, color="white",
+                        fontweight="bold", zorder=6)
+        else:
+            ax.annotate(f"£{v:,.2f}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                        ha="center", rotation=90, va="bottom", fontsize=6, color=INK, zorder=6)
+    ax.set_xticks(days)
+    ax.set_xlabel("Day of month", fontsize=8, color=MUTED)
+    _style(ax)
+    ax.margins(y=0.2)
+    ax.set_title(f"Avg spend per wagon per day — {report_date:%B %Y}",
+                 fontsize=11, color=NAVY, fontweight="bold", loc="left", pad=8)
+    fig.tight_layout()
+    fig.savefig(out_png, bbox_inches="tight")
+    plt.close(fig)
+    return out_png
+
+
 def _avg_bar(labels, vals, title, out_png, width=8.6, height=2.15, rot=0):
     fig, ax = plt.subplots(figsize=(width, height), dpi=150)
     x = np.arange(len(vals))
@@ -141,16 +181,24 @@ def age_avg_chart(spd, out_png):
     order = [2021, 2022, 2023, 2024, 2025, 2026, "other"]
     lbl = {2021: "2021", 2022: "2022", 2023: "2023", 2024: "2024",
            2025: "2025", 2026: "2026", "other": "Older"}
-    labels = [lbl[k] for k in order]
-    vals = [spd["age_ytd"].get(k, 0) for k in order]
-    return _avg_bar(labels, vals, "Avg spend per day — by age range (YTD)", out_png)
+    fleet = spd.get("age_fleet", {})
+    labels, vals = [], []
+    for k in order:
+        n = fleet.get(k, 0)
+        if not n:
+            continue
+        labels.append(lbl[k])
+        vals.append(spd["age_ytd"].get(k, 0) / n)
+    return _avg_bar(labels, vals, "Avg spend per day per wagon — by age range (YTD)", out_png)
 
 
 def area_avg_chart(spd, out_png, top=10):
-    items = sorted(spd["area_ytd"].items(), key=lambda x: -x[1])[:top]
+    fleet = spd.get("area_fleet", {})
+    per = [(a, spd["area_ytd"][a] / fleet[a]) for a in spd["area_ytd"] if fleet.get(a)]
+    items = sorted(per, key=lambda x: -x[1])[:top]
     labels = [a.title() for a, _ in items]
     vals = [v for _, v in items]
-    return _avg_bar(labels, vals, "Avg spend per day — by area (YTD, top 10)", out_png, rot=30)
+    return _avg_bar(labels, vals, "Avg spend per day per wagon — by area (YTD, top 10)", out_png, rot=30)
 
 
 if __name__ == "__main__":

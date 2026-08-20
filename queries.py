@@ -151,12 +151,15 @@ def spend_per_day(report_date):
     # distinct wagons the average is drawn from THIS MONTH (MTD) — a reg counts
     # once per bucket. Non-vehicle areas (Consumables, Reference Missing, ...)
     # carry no reg, so their wagon count is 0.
-    area_wag, age_wag = defaultdict(set), defaultdict(set)
+    area_wag, age_wag = defaultdict(set), defaultdict(set)          # this month (MTD)
+    area_wag_y, age_wag_y = defaultdict(set), defaultdict(set)      # year to date
     for rd, div, area, reg, cost in rows:
         cst = float(cost or 0)
         a = area or 'REFERENCE MISSING'
         area_y[a] += cst
         r = (reg or '').strip().upper()
+        if r:
+            area_wag_y[a].add(r)
         if rd >= first:
             area_m[a] += cst
             if r:
@@ -164,17 +167,36 @@ def spend_per_day(report_date):
         if (div or '').strip() in TOP:
             k = reg_year(reg or '') or 'other'
             age_y[k] += cst
+            if r:
+                age_wag_y[k].add(r)
             if rd >= first:
                 age_m[k] += cst
                 if r:
                     age_wag[k].add(r)
     per = lambda d, days: {k: v / days for k, v in d.items()}
+    # Fleet denominators: EVERY wagon we report on in each section (from the
+    # master lookup), not just the ones with spend — so the per-wagon figure is
+    # a true average for the section, not just that section's spend. Non-vehicle
+    # sections (Workshop, Consumables, Tyres, Reference Missing) have no fleet.
+    fleet_area, fleet_age = {}, {}
+    try:
+        import vrm_lookup
+        from collections import Counter
+        reg_to_area, _lk2, _lk3 = vrm_lookup.load_lookup()
+        fleet_area = dict(Counter(reg_to_area.values()))
+        fa = Counter()
+        for rg in reg_to_area:
+            fa[reg_year(rg) or 'other'] += 1
+        fleet_age = dict(fa)
+    except Exception as _e:
+        print(f"fleet counts unavailable: {_e}")
     return {
         'ytd_days': ytd_days, 'mtd_days': mtd_days,
         'area_ytd': per(area_y, ytd_days), 'area_mtd': per(area_m, mtd_days),
         'age_ytd': per(age_y, ytd_days), 'age_mtd': per(age_m, mtd_days),
         'area_wagons': {k: len(v) for k, v in area_wag.items()},
         'age_wagons': {k: len(v) for k, v in age_wag.items()},
+        'area_fleet': fleet_area, 'age_fleet': fleet_age,
     }
 
 
