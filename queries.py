@@ -140,6 +140,18 @@ def spend_per_day(report_date):
     TOP = {s.strip() for s in TOP_SHEETS}
     jan1 = _dt.date(report_date.year, 1, 1)
     first, _ = _bounds(report_date.year, report_date.month)
+    # Cars and vans are excluded from the averages entirely (Daniel 20/08/2026):
+    # they are not wagons, so they distort the per-wagon figures. Their spend
+    # still appears in full on the cover/division/area-total pages for balance.
+    EXCLUDE = {'VAN', 'CAR'}
+    # The fleet lookup: reg -> area for every wagon we report on.
+    reg_to_area = {}
+    try:
+        import vrm_lookup
+        reg_to_area, _lk2, _lk3 = vrm_lookup.load_lookup()
+    except Exception as _e:
+        print(f"fleet lookup unavailable: {_e}")
+
     with get_conn() as c, c.cursor() as cur:
         cur.execute("""SELECT report_date, division, area, vehicle_reg, cost FROM transactions
                        WHERE report_date >= %s AND report_date <= %s""", (jan1, report_date))
@@ -152,42 +164,43 @@ def spend_per_day(report_date):
     # once per bucket. Non-vehicle areas (Consumables, Reference Missing, ...)
     # carry no reg, so their wagon count is 0.
     area_wag, age_wag = defaultdict(set), defaultdict(set)          # this month (MTD)
-    area_wag_y, age_wag_y = defaultdict(set), defaultdict(set)      # year to date
     for rd, div, area, reg, cost in rows:
         cst = float(cost or 0)
         a = area or 'REFERENCE MISSING'
+        if a in EXCLUDE:                       # no cars/vans in the area averages
+            continue
         area_y[a] += cst
-        r = (reg or '').strip().upper()
-        if r:
-            area_wag_y[a].add(r)
+        r = (reg or '').strip().upper().replace(' ', '')
         if rd >= first:
             area_m[a] += cst
             if r:
                 area_wag[a].add(r)
-        if (div or '').strip() in TOP:
-            k = reg_year(reg or '') or 'other'
+        # Age range = genuine fleet wagons only: reg must be a real fleet vehicle
+        # (in the lookup) and not a car/van. This also drops internal reference
+        # codes (BT32DAM, TR13MOT ...) that only look like plates.
+        if (div or '').strip() in TOP and r in reg_to_area and reg_to_area[r] not in EXCLUDE:
+            k = reg_year(r) or 'other'
             age_y[k] += cst
-            if r:
-                age_wag_y[k].add(r)
             if rd >= first:
                 age_m[k] += cst
-                if r:
-                    age_wag[k].add(r)
+                age_wag[k].add(r)
     per = lambda d, days: {k: v / days for k, v in d.items()}
     # Fleet denominators: EVERY wagon we report on in each section (from the
     # master lookup), not just the ones with spend — so the per-wagon figure is
-    # a true average for the section, not just that section's spend. Non-vehicle
-    # sections (Workshop, Consumables, Tyres, Reference Missing) have no fleet.
+    # a true average for the section, not just that section's spend. Cars and
+    # vans are excluded; non-vehicle sections (Workshop, Consumables, ...) have
+    # no fleet.
     fleet_area, fleet_age = {}, {}
     try:
-        import vrm_lookup
         from collections import Counter
-        reg_to_area, _lk2, _lk3 = vrm_lookup.load_lookup()
-        fleet_area = dict(Counter(reg_to_area.values()))
-        fa = Counter()
-        for rg in reg_to_area:
-            fa[reg_year(rg) or 'other'] += 1
-        fleet_age = dict(fa)
+        fa_area, fa_age = Counter(), Counter()
+        for rg, ar in reg_to_area.items():
+            if ar in EXCLUDE:
+                continue
+            fa_area[ar] += 1
+            fa_age[reg_year(rg) or 'other'] += 1
+        fleet_area = dict(fa_area)
+        fleet_age = dict(fa_age)
     except Exception as _e:
         print(f"fleet counts unavailable: {_e}")
     return {
