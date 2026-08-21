@@ -199,7 +199,11 @@ def body_text(r, cmp_=None):
         "Hi All,\n\n"
         f"Today's Lancashire daily wagon earnings pack for {d:%a} {d.day} {d:%b %Y} "
         "is attached.\n\n"
-        f"Total earnings: {money(k['total_earnings'])}\n"
+        + (f"This replaces the pack sent earlier for the same day - the figures "
+           f"have been updated from {money(r['revised_from'])} to "
+           f"{money(k['total_earnings'])}." + chr(10) * 2
+           if r.get("revised_from") else "")
+        + f"Total earnings: {money(k['total_earnings'])}\n"
         f"EBITDA: {money(k['ebitda'])}\n"
         f"Profit: {money(k['profit'])}\n"
         f"Rolling 5-day average: {money(k['rolling_5day'])}\n"
@@ -237,6 +241,7 @@ Red under £{TARGET_PER_WAGON-100:,.0f}</p>"""
     return f"""<html><body>
 <p>Hi All,</p>
 <p>Today's Lancashire daily wagon earnings pack for {d:%a} {d.day} {d:%b %Y} is attached.</p>
+{f'<p style="background:#fdf3e2;color:#7f6000;padding:8px 10px;margin:0 0 10px">This replaces the pack sent earlier for the same day. The figures have been updated from {money(r["revised_from"])} to {money(k["total_earnings"])}.</p>' if r.get("revised_from") else ''}
 <p>Total earnings: {money(k['total_earnings'])}<br>
 EBITDA: {money(k['ebitda'])}<br>
 Profit: {money(k['profit'])}<br>
@@ -276,6 +281,8 @@ def send(r, pdf, dry_run=False, to_me=False, workbook=None, draft=False,
          cmp_=None):
     d = r["focus"]
     subject = f"Daily Wagon Earnings Pack — {d:%a} {d.day} {d:%b %Y}"
+    if r.get("revised_from"):
+        subject += " (revised)"
     to = [ENV["GMAIL_USER"]] if to_me else SEND_TO
     cc = [] if to_me else SEND_CC
     if to_me:
@@ -335,6 +342,55 @@ def notify(subject, body, dry_run=False):
         s.starttls(context=ctx)
         s.login(ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"])
         s.send_message(m)
+
+
+def pack_already_sent(focus):
+    """(total earnings, when) of a pack we have already sent for `focus`, or None.
+
+    Mel now saves over the covered master we send back, so if she re-sends it the
+    run has a fresh email for a day already reported. Identical figures are a
+    pure echo and worth suppressing; changed figures are a real correction and
+    must go out, but labelled as one — three unmarked packs for the same day
+    landed on the Lancashire list on 21/08/2026 and nobody could tell which
+    superseded which.
+    """
+    import re
+    want = f"{focus:%a} {focus.day} {focus:%b %Y}"
+    M = _connect()
+    try:
+        M.select('"[Gmail]/All Mail"')
+        since = (focus - dt.timedelta(days=3)).strftime("%d-%b-%Y")
+        typ, data = M.search(
+            None, f'(SINCE "{since}" FROM "{ENV["GMAIL_USER"]}" '
+                  f'SUBJECT "Daily Wagon Earnings Pack")')
+        best = None
+        for uid in data[0].split():
+            typ, md = M.fetch(uid, "(RFC822)")
+            if not md or not md[0]:
+                continue
+            msg = email.message_from_bytes(md[0][1])
+            subj = str(email.header.make_header(
+                email.header.decode_header(msg.get("Subject", ""))))
+            if subj.strip().startswith("[TEST") or want not in subj:
+                continue
+            body = ""
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    body = part.get_payload(decode=True).decode("utf-8", "ignore")
+                    break
+            m = re.search(r"Total earnings: £([\d,]+)", body)
+            if not m:
+                continue
+            when = email.utils.parsedate_to_datetime(msg.get("Date"))
+            total = float(m.group(1).replace(",", ""))
+            if best is None or when > best[1]:
+                best = (total, when)
+        return best
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
 
 
 def last_pack_sent():
@@ -446,6 +502,25 @@ def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False,
                    "The pack was built but NOT sent — these checks failed:\n\n"
                    + "\n".join(f"  - {p}" for p in problems), dry_run)
             return 1
+
+        # Mel re-sends the master, so a day can come round twice. An identical
+        # repeat is an echo and is dropped; a changed one is a real correction
+        # and goes out saying so.
+        prior = None if force else pack_already_sent(r["focus"])
+        if prior:
+            was, when = prior
+            if abs(was - (r["kpis"]["total_earnings"] or 0)) < 1:
+                print(f"  {r['focus']} already sent at {when:%H:%M} with the same "
+                      f"figures ({money(was)}) — not sending again.")
+                if not dry_run and not to_me and not draft:
+                    state["processed_message_ids"] = (state["processed_message_ids"]
+                                                      + [m["id"] for m in new])[-300:]
+                    save_state(state)
+                return 0
+            r["revised_from"] = was
+            print(f"  {r['focus']} was sent at {when:%H:%M} showing {money(was)}; "
+                  f"figures have changed to {money(r['kpis']['total_earnings'])} "
+                  f"— sending as a revision.")
 
         try:
             cmp_ = lancs_comparison(book)

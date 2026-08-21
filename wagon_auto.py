@@ -1052,6 +1052,24 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False, draft=False):
             alert_daniel(problems, results, dry_run)
             return 1
 
+        # Katie re-sends sheets ("please use this one"), so a run can end up
+        # rewriting days with figures identical to the ones already reported.
+        # Emailing the list again adds nothing and nobody can tell which copy
+        # supersedes which — three same-day packs landed on the Lancashire list
+        # on 21/08/2026 for that reason. A genuine correction still goes out.
+        moved = [r for r in results
+                 if not r["replaced"] or r["previous_total"] is None
+                 or abs(r["previous_total"] - r["expected_total_earnings"]) >= 1]
+        if not moved:
+            days = ", ".join(r["date"] for r in results)
+            print(f"Every day is an unchanged repeat ({days}) — not sending again.")
+            if not dry_run and not to_me and not draft:
+                shutil.copy(final, MASTER_FILE)
+                state["processed_message_ids"] = (state["processed_message_ids"]
+                                                  + [m["id"] for m in new])[-500:]
+                save_state(state)
+            return 0
+
         last = max(dt.date.fromisoformat(r["date"]) for r in results)
         note = commentary(results, month_context(final, last))
         # Its own directory — the covered copy keeps the master's filename, so
