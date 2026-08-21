@@ -49,6 +49,7 @@ from wagon_master_fill import (fill_master, master_state, read_transaction_repor
                                band, band_cell, TARGET_PER_WAGON, save_as_draft)
 import tidy_master
 import lancs_cover                  # Paul wants the same cover tab on both masters
+import period_compare
 import lancs_inject
 
 HERE = Path(__file__).parent
@@ -723,6 +724,32 @@ SECTION_DISPLAY = [("HOOKS", "Hooks", "avg"), ("8W", "8x4", "avg"),
                    ("8W SLEEPERS", "Sleepers", "avg"),
                    ("ARTIC - NIGHT WORK - BREAKDOWN", "Nights total", "sum")]
 
+# The period comparison covers EVERY block, including the two the daily averages
+# leave out, so its total is the whole fleet's earnings rather than a subset.
+COMPARE_NAMES = {**{blk: nm for blk, nm, _h in SECTION_DISPLAY},
+                 "HOOKS ON HIRE": "Hooks on hire",
+                 "ARTIC - NIGHT WORK - BREAKDOWN": "Nights"}
+
+
+def compare_blocks(master):
+    lay = detect_layout(openpyxl.load_workbook(str(master))["DAILY"])
+    return [(COMPARE_NAMES.get(n, n.title()), a, b) for n, a, b in lay.blocks]
+
+
+def comparison(master, upto):
+    """Paul's like-for-like month comparison, or None if it cannot be built."""
+    return period_compare.compare(master, compare_blocks(master), upto=upto)
+
+
+def daily_chart(master, upto, cmp_=None):
+    """PNG of this month's daily earnings so far, or None."""
+    series = period_compare.daily_series(master, compare_blocks(master), upto=upto)
+    prev_avg = None
+    if cmp_ and cmp_["prev_days"]:
+        prev_avg = cmp_["total"][2] / cmp_["prev_days"]
+    return period_compare.daily_chart_png(series, prev_avg=prev_avg,
+                                          month_label=f"{upto:%B}")
+
 
 def section_averages(master, day):
     """[(name, day average, month-to-date average)] — the per-wagon figures Paul
@@ -805,6 +832,16 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None,
     except Exception as e:
         print(f"  ! section averages failed ({e}) — sending without them")
         secs = []
+    try:
+        cmp_ = comparison(final_path, last)
+    except Exception as e:
+        print(f"  ! period comparison failed ({e}) — sending without it")
+        cmp_ = None
+    try:
+        chart_png = daily_chart(final_path, last, cmp_)
+    except Exception as e:
+        print(f"  ! daily chart failed ({e}) — sending without it")
+        chart_png = None
     fname = master_filename(last)
     # The covered copy is what Paul gets; the plain one stays as our stored master.
     attach = workbook if workbook and Path(workbook).exists() else final_path
@@ -814,6 +851,8 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None,
     <div style="font-family:Arial,Helvetica,sans-serif;color:#24214a;font-size:15px">
       {'<p>' + note.replace(chr(10) + chr(10), '</p><p>') + '</p>' if note else ''}
       {sections_html(secs, last) if secs else ''}
+      {period_compare.to_html(cmp_)}
+      {'<p style="margin:12px 0 0"><img src="cid:dailychart" style="width:100%;max-width:720px" alt="Daily earnings this month"></p>' if chart_png else ''}
       <p style="font-size:13px;color:#666">Master attached, updated to
          {ordinal(last.day)} {last:%B}.{cover}</p>
       <hr style="border:none;border-top:1px solid #ccc">
@@ -832,6 +871,8 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None,
                       + (f"  {band(v).upper()}" if band(v)
                          and "total" not in shown.lower() else "")
                       for shown, v, mtd in secs))
+    if cmp_:
+        plain += chr(10) * 2 + period_compare.to_text(cmp_)
 
     # --to-me proves the whole path (fill, tidy, commentary, SMTP, attachment)
     # without anything reaching Paul.
@@ -845,6 +886,9 @@ def send(final_path, results, note, dry_run=False, to_me=False, workbook=None,
     m["Subject"] = ("[TEST — would go to Paul] " if to_me else "") + subject
     m.set_content(plain)
     m.add_alternative(html, subtype="html")
+    if chart_png:
+        m.get_payload()[-1].add_related(chart_png, maintype="image", subtype="png",
+                                       cid="<dailychart>")
     m.add_attachment(Path(attach).read_bytes(), maintype="application",
                      subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      filename=fname)
@@ -1025,9 +1069,14 @@ def run(dry_run=False, since_days=21, out_dir=None, to_me=False, draft=False):
             print(f"  section bands: {info['blocks']} blocks to column {info['to_column']}")
         except Exception as e:
             print(f"  ! section bands failed ({e}) — sending without them")
+        try:
+            dash = comparison(banded, last)
+        except Exception as e:
+            print(f"  ! dashboard comparison failed ({e})")
+            dash = None
         covered = lancs_cover.build_onto(banded, cover_dir,
                                          company="Fox Brothers (Leyland)",
-                                         averages=True)
+                                         averages=True, dashboard=dash)
         fname = send(final, results, note, dry_run, to_me=to_me, workbook=covered,
                      draft=draft)
 

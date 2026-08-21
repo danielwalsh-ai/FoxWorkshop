@@ -516,6 +516,7 @@ def build_cover_workbook(months, data, out_path, chart_rows=None, sections=None,
 
 
 AVG_SHEET = "MONTHLY AVERAGES"
+DASH_SHEET = "DASHBOARD"
 
 
 def averages_rows(path, sheet="DAILY", limit=250):
@@ -636,12 +637,14 @@ def build_averages_workbook(months, data, out_path, company):
     wb.save(out_path)
 
 
-def build_onto(book, out_dir, company="Fox Brothers (Lancashire)", averages=False):
+def build_onto(book, out_dir, company="Fox Brothers (Lancashire)", averages=False,
+               dashboard=None):
     """Rebuild the cover tab onto `book` and hand back the covered copy.
 
     Same filename as the original, so whoever owns the master carries on saving
     over their own file. With averages=True a MONTHLY AVERAGES tab (daily average
-    per category per month — Paul asked, 07/08/2026) goes in as well. Returns
+    per category per month — Paul asked, 07/08/2026) goes in as well. Pass a
+    period_compare.compare() result as `dashboard` for a DASHBOARD tab. Returns
     None on failure — the daily report still goes out; a cover problem shouldn't
     hold up the numbers.
     """
@@ -659,6 +662,9 @@ def build_onto(book, out_dir, company="Fox Brothers (Lancashire)", averages=Fals
         bare2 = Path(out_dir) / ("_bare2_" + src.name)
         if lancs_inject.strip(str(book), str(bare2), sheet_name=AVG_SHEET)["removed"]:
             book = bare2
+        bare3 = Path(out_dir) / ("_bare3_" + src.name)
+        if lancs_inject.strip(str(book), str(bare3), sheet_name=DASH_SHEET)["removed"]:
+            book = bare3
         rows = highlighted_rows(str(book)) or default_rows(str(book))
         months, data = monthly(str(book), rows)
         if not months:
@@ -686,9 +692,21 @@ def build_onto(book, out_dir, company="Fox Brothers (Lancashire)", averages=Fals
                 avg_tmp.unlink(missing_ok=True)
                 print(f"  averages tab: {len(avg_rows)} categories, {len(m2)} months")
 
+        if dashboard:
+            import period_compare
+            dash_tmp = Path(out_dir) / "_dashboard.xlsx"
+            period_compare.build_dashboard_workbook(dashboard, str(dash_tmp), company)
+            mid2 = Path(out_dir) / ("_mid2_" + src.name)
+            lancs_inject.inject(str(book), str(dash_tmp), str(mid2),
+                                sheet_name=DASH_SHEET, first=False)
+            book = mid2
+            dash_tmp.unlink(missing_ok=True)
+            print(f"  dashboard tab: {dashboard['this_label']} v "
+                  f"{dashboard['prev_label']}, {dashboard['days']} trading days")
+
         lancs_inject.inject(str(book), str(tmp), str(out))
         tmp.unlink(missing_ok=True)
-        for leftover in ("_bare_", "_bare2_", "_mid_"):
+        for leftover in ("_bare_", "_bare2_", "_bare3_", "_mid_", "_mid2_"):
             (Path(out_dir) / (leftover + src.name)).unlink(missing_ok=True)
         print(f"  cover rebuilt: {len(rows)} rows, {len(months)} months "
               f"({months[0]:%b %y}..{months[-1]:%b %y})")

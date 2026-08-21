@@ -35,6 +35,7 @@ import lancs_data
 from lancs_pack import money
 from wagon_master_fill import (apply_section_bands, band_cell, TARGET_PER_WAGON,
                                save_as_draft)
+import period_compare
 
 HERE = Path(__file__).parent
 STATE_DIR = HERE / "state"
@@ -155,6 +156,28 @@ def fetch_mel(tmpdir, since_days=10, wanted=None):
             pass
 
 
+def lancs_blocks():
+    return [(c[3], c[1], c[2]) for c in lancs_data.CATEGORIES]
+
+
+def lancs_comparison(book):
+    """Paul's month-on-month comparison for the Lancashire fleet."""
+    return period_compare.compare(book, lancs_blocks(),
+                                  date_row=lancs_data.DATE_ROW,
+                                  first_col=lancs_data.FIRST_DATA_COL)
+
+
+def lancs_chart(book, cmp_):
+    series = period_compare.daily_series(book, lancs_blocks(),
+                                         date_row=lancs_data.DATE_ROW,
+                                         first_col=lancs_data.FIRST_DATA_COL)
+    if not series:
+        return None
+    prev_avg = (cmp_["total"][2] / cmp_["prev_days"]) if cmp_ and cmp_["prev_days"] else None
+    return period_compare.daily_chart_png(
+        series, prev_avg=prev_avg, month_label=f"{series[-1][0]:%B}")
+
+
 def sections_text(r):
     """Per-section average per wagon on the day — Paul forwards these on
     (asked 08/08/2026, for both masters). RAG banded from 11/08/2026, same
@@ -169,7 +192,7 @@ def sections_text(r):
           f"-£{int(TARGET_PER_WAGON)-1}, red under £{int(TARGET_PER_WAGON)-100})\n\n")
 
 
-def body_text(r):
+def body_text(r, cmp_=None):
     k, off = r["kpis"], r["off"]
     d = r["focus"]
     return (
@@ -183,13 +206,14 @@ def body_text(r):
         f"Wagons under target: {k['under_target']} of {k['in_service']} in service\n"
         f"Wagons off the road on the day: {int(k['off_road'] or 0)}\n"
         f"Wagon-days lost in the last 7 trading days: {int(k['wagon_days_lost'] or 0)}\n\n"
-        + sections_text(r) +
+        + sections_text(r)
+        + ((period_compare.to_text(cmp_) + chr(10) * 2) if cmp_ else "") +
         "Full breakdown in the attached PDF, and the master with the cover sheet "
         "is attached alongside it.\n\n"
         f"{SIGN_OFF}\n")
 
 
-def body_html(r):
+def body_html(r, cmp_=None):
     k = r["kpis"]
     d = r["focus"]
     cats = r.get("cats") or []
@@ -221,6 +245,8 @@ Wagons under target: {k['under_target']} of {k['in_service']} in service<br>
 Wagons off the road on the day: {int(k['off_road'] or 0)}<br>
 Wagon-days lost in the last 7 trading days: {int(k['wagon_days_lost'] or 0)}</p>
 {sections}
+{period_compare.to_html(cmp_)}
+{'<p style="margin:12px 0 0"><img src="cid:dailychart" style="width:100%;max-width:720px" alt="Daily earnings this month"></p>' if r.get('chart_png') else ''}
 <p>Full breakdown in the attached PDF, and the master with the cover sheet is attached alongside it.</p>
 <p>{SIGN_OFF}</p>
 </body></html>"""
@@ -246,7 +272,8 @@ def validate(r):
 build_cover = lancs_cover.build_onto          # shared with the Leyland run
 
 
-def send(r, pdf, dry_run=False, to_me=False, workbook=None, draft=False):
+def send(r, pdf, dry_run=False, to_me=False, workbook=None, draft=False,
+         cmp_=None):
     d = r["focus"]
     subject = f"Daily Wagon Earnings Pack — {d:%a} {d.day} {d:%b %Y}"
     to = [ENV["GMAIL_USER"]] if to_me else SEND_TO
@@ -259,8 +286,11 @@ def send(r, pdf, dry_run=False, to_me=False, workbook=None, draft=False):
     if cc:
         m["Cc"] = ", ".join(cc)
     m["Subject"] = subject
-    m.set_content(body_text(r))
-    m.add_alternative(body_html(r), subtype="html")
+    m.set_content(body_text(r, cmp_))
+    m.add_alternative(body_html(r, cmp_), subtype="html")
+    if r.get("chart_png"):
+        m.get_payload()[-1].add_related(r["chart_png"], maintype="image",
+                                       subtype="png", cid="<dailychart>")
     m.add_attachment(Path(pdf).read_bytes(), maintype="application", subtype="pdf",
                      filename=Path(pdf).name)
     if workbook and Path(workbook).exists():
@@ -277,7 +307,7 @@ def send(r, pdf, dry_run=False, to_me=False, workbook=None, draft=False):
             print(f"[DRY RUN] attach: {Path(workbook).name} "
                   f"({Path(workbook).stat().st_size/1e6:.1f} MB)")
         print()
-        print(body_text(r))
+        print(body_text(r, cmp_))
         return
     if draft:
         save_as_draft(m, ENV["GMAIL_USER"], ENV["GMAIL_APP_PASSWORD"], IMAP_TIMEOUT)
@@ -417,8 +447,14 @@ def run(dry_run=False, to_me=False, since_days=10, out_dir=None, force=False,
                    + "\n".join(f"  - {p}" for p in problems), dry_run)
             return 1
 
-        workbook = build_cover(book, pack_dir)
-        send(r, pdf, dry_run, to_me, workbook=workbook, draft=draft)
+        try:
+            cmp_ = lancs_comparison(book)
+            r["chart_png"] = lancs_chart(book, cmp_)
+        except Exception as e:
+            print(f"  ! comparison/chart failed ({e}) — sending without them")
+            cmp_ = None
+        workbook = build_cover(book, pack_dir, dashboard=cmp_)
+        send(r, pdf, dry_run, to_me, workbook=workbook, draft=draft, cmp_=cmp_)
         if not dry_run and not to_me and not draft:
             state["processed_message_ids"] = (state["processed_message_ids"]
                                               + [m["id"] for m in new])[-300:]
